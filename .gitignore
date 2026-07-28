@@ -1,0 +1,9 @@
+# Subagent-driven-development scratch (ledgers, briefs, review packages).
+.superpowers/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Baked moves are outputs, not sources.
+/moves/
