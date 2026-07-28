@@ -11,7 +11,19 @@ from . import bake, rig, sync
 
 
 # Module-level state for test_pose timer-driven sequence.
-_test_state = {"client": None, "steps": [], "index": 0}
+_test_state = {"client": None, "steps": [], "index": 0, "label": ""}
+
+
+def _test_pose_in_flight():
+    """True while the test-pose sequence owns an open socket.
+
+    Sync and the test sequence must be mutually exclusive: the daemon
+    silently drops a streamed set_full_target while any move (including a
+    goto_target step of the test sequence) is running, and silently drops a
+    goto_target while another move is already running. Without this guard
+    each path would silently eat the other.
+    """
+    return _test_state["client"] is not None
 
 
 class ReachyMiniLinkProps(bpy.types.PropertyGroup):
@@ -40,7 +52,7 @@ class ReachyMiniLinkProps(bpy.types.PropertyGroup):
 
     head_scale: bpy.props.FloatProperty(
         name="Head translation scale", default=rig.HEAD_TRANSLATION_SCALE,
-        min=0.0, soft_max=2.0, precision=4,
+        min=0.0, max=2.0, soft_max=2.0, precision=4,
         description=("Blender units to metres for head translation. The rig is "
                      "~2.19x oversized; see docs/RIG_MAPPING.md"))
 
@@ -56,6 +68,20 @@ def _settings(props):
         rate_hz=props.rate_hz,
         mapping=_mapping(props),
     )
+
+
+def _stop_test_pose():
+    """Unregister the tick, disconnect and clear _test_state.
+
+    Shared by the cancel operator and unregister() so both tear the
+    sequence down the same way.
+    """
+    global _test_state
+    if bpy.app.timers.is_registered(_test_pose_tick):
+        bpy.app.timers.unregister(_test_pose_tick)
+    if _test_state["client"] is not None:
+        _test_state["client"].disconnect()
+    _test_state = {"client": None, "steps": [], "index": 0, "label": ""}
 
 
 def _test_pose_tick():
@@ -76,6 +102,7 @@ def _test_pose_tick():
         return None
     label, head, antennas, body_yaw, duration = st["steps"][st["index"]]
     st["index"] += 1
+    st["label"] = label   # for the panel's progress line
     try:
         client_obj.send_goto_target(head=head, antennas=antennas,
                                     body_yaw=body_yaw, duration=duration)
@@ -95,6 +122,12 @@ class REACHY_MINI_OT_sync_start(bpy.types.Operator):
     bl_label = "Start Sync"
 
     def execute(self, context):
+        if _test_pose_in_flight():
+            self.report({"ERROR"},
+                        "Reachy Mini: cannot start sync while a test pose "
+                        "sequence is running")
+            return {"CANCELLED"}
+
         props = context.scene.reachy_mini_link
         try:
             sync.start(_settings(props))
@@ -125,8 +158,17 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
     def execute(self, context):
         global _test_state
 
+        # Sync and the test sequence must be mutually exclusive (see
+        # _test_pose_in_flight's docstring): each silently eats the other's
+        # commands on the daemon side.
+        if sync.is_running():
+            self.report({"ERROR"},
+                        "Reachy Mini: cannot start a test pose sequence "
+                        "while sync is running")
+            return {"CANCELLED"}
+
         # Guard: do not start a second sequence if one is already running.
-        if _test_state["client"] is not None:
+        if _test_pose_in_flight():
             self.report({"INFO"}, "Test sequence already running")
             return {"CANCELLED"}
 
@@ -143,11 +185,22 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
             m[3], m[7], m[11] = dx, dy, dz
             return m
 
+        def head_roll_x(deg):
+            # Rotation about the head's local X axis, flat-16 row-major,
+            # translation left at zero (indices 3/7/11).
+            a = math.radians(deg)
+            c, s = math.cos(a), math.sin(a)
+            return [1.0, 0.0, 0.0, 0.0,
+                    0.0, c, -s, 0.0,
+                    0.0, s, c, 0.0,
+                    0.0, 0.0, 0.0, 1.0]
+
         # Each step is 2 s so a human can see which way the robot moved.
         steps = [
             ("neutral", head(), [0.0, 0.0], 0.0, 2.0),
             ("+Z 20mm", head(dz=0.02), [0.0, 0.0], 0.0, 2.0),
             ("+X 20mm", head(dx=0.02), [0.0, 0.0], 0.0, 2.0),
+            ("roll +15deg", head_roll_x(15.0), [0.0, 0.0], 0.0, 2.0),
             ("right antenna +45", head(), [math.radians(45.0), 0.0], 0.0, 2.0),
             ("left antenna +45", head(), [0.0, math.radians(45.0)], 0.0, 2.0),
             ("body yaw +30", head(), [0.0, 0.0], math.radians(30.0), 2.0),
@@ -177,6 +230,18 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class REACHY_MINI_OT_cancel_test_pose(bpy.types.Operator):
+    """Cancel the running test pose sequence and disconnect"""
+
+    bl_idname = "reachy_mini.cancel_test_pose"
+    bl_label = "Cancel Test Pose"
+
+    def execute(self, context):
+        _stop_test_pose()
+        self.report({"INFO"}, "Test sequence cancelled")
+        return {"FINISHED"}
+
+
 class REACHY_MINI_OT_export_move(bpy.types.Operator):
     """Bake the timeline to a Reachy Mini move JSON"""
 
@@ -194,12 +259,14 @@ class REACHY_MINI_OT_export_move(bpy.types.Operator):
                 description=props.description,
                 frame_start=start, frame_end=end,
             )
-            bake.write_move(props.out_path, move)
-        except (rig.RigError, OSError) as exc:
+            resolved_path = bake.write_move(props.out_path, move)
+        except (rig.RigError, OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
+        # Report the resolved absolute path, not props.out_path's unresolved
+        # "//" form, so the artist is shown a path that actually exists.
         self.report({"INFO"},
-                    f"Wrote {len(move['time'])} frames to {props.out_path}")
+                    f"Wrote {len(move['time'])} frames to {resolved_path}")
         return {"FINISHED"}
 
 
@@ -235,7 +302,18 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         else:
             box.label(text="Idle", icon="RADIOBUT_OFF")
 
-        box.operator("reachy_mini.send_test_pose", icon="EXPORT")
+        test_running = _test_pose_in_flight()
+        row = box.row()
+        row.enabled = not sync.is_running() and not test_running
+        row.operator("reachy_mini.send_test_pose", icon="EXPORT")
+
+        if test_running:
+            st = _test_state
+            box.label(
+                text=f"Test pose {st['index']}/{len(st['steps'])}: {st['label']}",
+                icon="TIME")
+            box.operator("reachy_mini.cancel_test_pose", text="Cancel",
+                         icon="X")
 
         box = layout.box()
         box.label(text="Export Move")
@@ -258,6 +336,7 @@ _classes = (
     REACHY_MINI_OT_sync_start,
     REACHY_MINI_OT_sync_stop,
     REACHY_MINI_OT_send_test_pose,
+    REACHY_MINI_OT_cancel_test_pose,
     REACHY_MINI_OT_export_move,
     REACHY_MINI_PT_link,
 )
@@ -271,14 +350,8 @@ def register():
 
 
 def unregister():
-    global _test_state
-
     # Clean up the test sequence timer and connection before tearing down.
-    if bpy.app.timers.is_registered(_test_pose_tick):
-        bpy.app.timers.unregister(_test_pose_tick)
-    if _test_state["client"] is not None:
-        _test_state["client"].disconnect()
-        _test_state["client"] = None
+    _stop_test_pose()
 
     # Stop the sync loop before tearing down the classes it reports status through.
     sync.stop()
