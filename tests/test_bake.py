@@ -3,7 +3,6 @@
   blender --background reachy_mini.blend --python tests/run_blender_tests.py -- test_bake
 """
 import json
-import math
 import os
 import tempfile
 import unittest
@@ -48,7 +47,8 @@ class TestBakeSchema(unittest.TestCase):
         self.scene.render.fps = 24
         self.scene.render.fps_base = 1.001          # 23.976 fps
         move = bake.bake(self.scene, frame_start=1, frame_end=2)
-        self.assertAlmostEqual(move["time"][1], 1.0 / (24.0 / 1.001), delta=2e-9)
+        expected = 1.0 / (self.scene.render.fps / self.scene.render.fps_base)
+        self.assertAlmostEqual(move["time"][1], expected, delta=1e-9)
 
     def test_sample_fields_and_head_is_nested_4x4(self):
         move = bake.bake(self.scene, frame_start=1, frame_end=2)
