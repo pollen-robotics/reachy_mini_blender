@@ -183,6 +183,9 @@ class WSClient:
         self._stop.set()
         sock, self._sock = self._sock, None
         if sock is not None:
+            # shutdown() must come before close(): it is what unblocks the
+            # drain thread's blocking recv() (close() alone does not
+            # interrupt a recv already in progress on another thread).
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
