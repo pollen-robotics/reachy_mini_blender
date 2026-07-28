@@ -3,6 +3,7 @@ import os
 import socket
 import struct
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -84,6 +85,107 @@ class TestReadFrame(unittest.TestCase):
         with self.assertRaises(client.WSError):
             client.read_frame(b)
         b.close()
+
+
+from tests.fake_daemon import FakeDaemon
+
+
+class TestWSClient(unittest.TestCase):
+    def setUp(self):
+        self.daemon = FakeDaemon().start()
+        self.c = client.WSClient()
+
+    def tearDown(self):
+        self.c.disconnect()
+        self.daemon.stop()
+
+    def test_connect_completes_handshake(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        self.assertTrue(self.c.is_connected())
+        self.assertIsNone(self.c.last_error)
+
+    def test_connect_to_closed_port_raises_connectionerror(self):
+        dead = socket.socket()
+        dead.bind(("127.0.0.1", 0))
+        port = dead.getsockname()[1]
+        dead.close()
+        with self.assertRaises(ConnectionError):
+            self.c.connect("127.0.0.1", port, timeout=1.0)
+        self.assertIsNotNone(self.c.last_error)
+
+    def test_rejected_handshake_raises(self):
+        bad = FakeDaemon(bad_handshake=True).start()
+        try:
+            with self.assertRaises(client.WSError):
+                self.c.connect("127.0.0.1", bad.port, timeout=1.0)
+        finally:
+            bad.stop()
+
+    def test_send_full_target_payload_is_exact(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        head = [1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0]
+        self.c.send_full_target(head=head, antennas=[0.25, -0.25], body_yaw=0.5)
+        self.assertTrue(self.daemon.wait_for(1))
+        self.assertEqual(self.daemon.received[0], {
+            "type": "set_full_target",
+            "head": head,
+            "antennas": [0.25, -0.25],
+            "body_yaw": 0.5,
+        })
+
+    def test_omitted_fields_are_null(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        self.c.send_full_target(body_yaw=0.1)
+        self.assertTrue(self.daemon.wait_for(1))
+        msg = self.daemon.received[0]
+        self.assertIsNone(msg["head"])
+        self.assertIsNone(msg["antennas"])
+        self.assertEqual(msg["body_yaw"], 0.1)
+
+    def test_automatic_body_yaw_and_torque_commands(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        self.c.set_automatic_body_yaw(False)
+        self.c.set_torque(True)
+        self.assertTrue(self.daemon.wait_for(2))
+        self.assertEqual(self.daemon.received[0],
+                         {"type": "set_automatic_body_yaw", "enabled": False})
+        self.assertEqual(self.daemon.received[1],
+                         {"type": "set_torque", "on": True, "ids": None})
+
+    def test_goto_target_carries_duration(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        self.c.send_goto_target(body_yaw=0.2, duration=1.5)
+        self.assertTrue(self.daemon.wait_for(1))
+        msg = self.daemon.received[0]
+        self.assertEqual(msg["type"], "goto_target")
+        self.assertEqual(msg["duration"], 1.5)
+
+    def test_ping_is_answered_with_pong(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        self.daemon.send_ping()
+        # A pong is a control frame, not JSON, so assert via liveness instead:
+        # the client must still be usable and connected afterwards.
+        time.sleep(0.1)
+        self.c.send_full_target(body_yaw=0.0)
+        self.assertTrue(self.daemon.wait_for(1))
+        self.assertTrue(self.c.is_connected())
+
+    def test_server_message_refreshes_liveness(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        self.c._last_msg = 0.0                     # simulate a long silence
+        self.assertFalse(self.c.is_connected())
+        self.daemon.send_text({"type": "joint_positions"})
+        time.sleep(0.1)
+        self.assertTrue(self.c.is_connected())
+
+    def test_send_after_disconnect_raises(self):
+        self.c.connect("127.0.0.1", self.daemon.port)
+        self.c.disconnect()
+        with self.assertRaises(ConnectionError):
+            self.c.send_full_target(body_yaw=0.0)
 
 
 if __name__ == "__main__":

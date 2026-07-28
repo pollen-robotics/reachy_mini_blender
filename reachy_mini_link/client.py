@@ -16,8 +16,12 @@ This module must never import bpy: it is unit-tested outside Blender.
 
 import base64
 import hashlib
+import json
 import os
+import socket
 import struct
+import threading
+import time
 
 # RFC 6455 section 1.3 magic value.
 _GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -95,3 +99,174 @@ def read_frame(sock):
     if key:
         payload = bytes(b ^ key[i % 4] for i, b in enumerate(payload))
     return opcode, payload
+
+
+# No server message for longer than this while connected means the link is
+# gone. The daemon streams joint_positions at ~50 Hz, so silence is a real
+# signal rather than an absence of news.
+LIVENESS_TIMEOUT = 1.0
+
+
+class WSClient:
+    """A send-mostly WebSocket client with a background drain thread.
+
+    The drain thread exists for three reasons: the daemon streams state at
+    ~50 Hz and would otherwise fill the socket buffer; pings must be
+    answered; and the arrival time of the last message is our only signal
+    that the link is still alive.
+    """
+
+    def __init__(self):
+        self._sock = None
+        self._thread = None
+        self._stop = threading.Event()
+        self._send_lock = threading.Lock()
+        self._last_msg = 0.0
+        self.last_error = None
+
+    # -- lifecycle -------------------------------------------------------
+
+    def connect(self, host, port, path="/ws/sdk", timeout=5.0):
+        """Open the socket and complete the handshake.
+
+        Raises WSError (a ConnectionError) on any failure, after recording
+        the reason in last_error for the UI to display.
+        """
+        self.disconnect()
+        self.last_error = None
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+        except OSError as exc:
+            self.last_error = f"cannot reach {host}:{port} ({exc})"
+            raise WSError(self.last_error) from exc
+
+        try:
+            key = base64.b64encode(os.urandom(16)).decode()
+            sock.sendall(
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n\r\n".encode()
+            )
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    raise WSError("server closed during handshake")
+                head += chunk
+            status = head.split(b"\r\n", 1)[0]
+            if b"101" not in status:
+                raise WSError(f"handshake rejected: {status.decode(errors='replace')}")
+            expected = accept_key(key).encode()
+            if expected not in head:
+                raise WSError("bad Sec-WebSocket-Accept")
+        except OSError as exc:
+            sock.close()
+            self.last_error = f"handshake failed ({exc})"
+            raise WSError(self.last_error) from exc
+        except WSError as exc:
+            sock.close()
+            self.last_error = str(exc)
+            raise
+
+        # Blocking recv in the drain thread; the timeout only guarded connect.
+        sock.settimeout(None)
+        self._sock = sock
+        self._stop.clear()
+        self._last_msg = time.monotonic()
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def disconnect(self):
+        self._stop.set()
+        sock, self._sock = self._sock, None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+        thread, self._thread = self._thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+    def is_connected(self):
+        return (
+            self._sock is not None
+            and (time.monotonic() - self._last_msg) < LIVENESS_TIMEOUT
+        )
+
+    # -- receive ---------------------------------------------------------
+
+    def _drain(self):
+        """Read and discard server frames; answer pings; track liveness.
+
+        Never touches bpy — it runs off the main thread.
+        """
+        while not self._stop.is_set():
+            sock = self._sock
+            if sock is None:
+                return
+            try:
+                op, payload = read_frame(sock)
+            except (WSError, OSError) as exc:
+                if not self._stop.is_set():
+                    self.last_error = f"connection lost ({exc})"
+                return
+            self._last_msg = time.monotonic()
+            if op == OP_PING:
+                self._raw_send(payload, OP_PONG)
+            elif op == OP_CLOSE:
+                self.last_error = "server closed the connection"
+                return
+
+    # -- send ------------------------------------------------------------
+
+    def _raw_send(self, payload, opcode=OP_TEXT):
+        sock = self._sock
+        if sock is None:
+            raise WSError("not connected")
+        with self._send_lock:
+            try:
+                sock.sendall(encode_frame(payload, opcode))
+            except OSError as exc:
+                self.last_error = f"send failed ({exc})"
+                raise WSError(self.last_error) from exc
+
+    def _send_json(self, obj):
+        self._raw_send(json.dumps(obj).encode(), OP_TEXT)
+
+    # -- daemon commands -------------------------------------------------
+
+    def send_full_target(self, head=None, antennas=None, body_yaw=None):
+        """Immediate target, no interpolation. `head` is flat 16 row-major."""
+        self._send_json({
+            "type": "set_full_target",
+            "head": head,
+            "antennas": antennas,
+            "body_yaw": body_yaw,
+        })
+
+    def send_goto_target(self, head=None, antennas=None, body_yaw=None, duration=1.0):
+        """Interpolated target — used once on start to ease in from the
+        robot's current pose, so the first streamed frame is not a snap."""
+        self._send_json({
+            "type": "goto_target",
+            "head": head,
+            "antennas": antennas,
+            "body_yaw": body_yaw,
+            "duration": duration,
+        })
+
+    def set_automatic_body_yaw(self, enabled):
+        """Must be sent False before streaming: the SDK defaults it True,
+        which lets the daemon pick its own yaw and fight our channel."""
+        self._send_json({"type": "set_automatic_body_yaw", "enabled": bool(enabled)})
+
+    def set_torque(self, on, ids=None):
+        self._send_json({"type": "set_torque", "on": bool(on), "ids": ids})
