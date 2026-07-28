@@ -142,6 +142,22 @@ class TestHeadPose(unittest.TestCase):
         angle = state.head.to_3x3().to_quaternion().angle
         self.assertAlmostEqual(math.degrees(angle), 15.0, delta=0.01)
 
+    def test_body_yaw_rotates_head_in_base_frame(self):
+        # Critical: Head.001 is parented under Core. When the body yaws, the
+        # head must rotate in the base frame. This test catches the bug where
+        # base_bone is accidentally set to "Core" instead of "Base", which would
+        # cancel the yaw out of the head pose.
+        arm = bpy.data.objects["Armature"]
+        arm.pose.bones["Slider.Rot.Core"].location[1] = 0.05
+        state = read()
+        # Head.001 is at rest locally, but Core has rotated, so head pose
+        # in base frame should NOT be identity.
+        head_angle = state.head.to_3x3().to_quaternion().angle
+        self.assertAlmostEqual(head_angle, 1.269300, delta=1e-3,
+                               msg="head rotation should contain body yaw")
+        self.assertAlmostEqual(state.body_yaw, 1.269300, delta=1e-5,
+                               msg="body yaw should be independently correct")
+
 
 class TestSerialisation(unittest.TestCase):
     def setUp(self):
