@@ -162,14 +162,14 @@ class WSClient:
             expected = accept_key(key).encode()
             if expected not in head:
                 raise WSError("bad Sec-WebSocket-Accept")
-        except OSError as exc:
-            sock.close()
-            self.last_error = f"handshake failed ({exc})"
-            raise WSError(self.last_error) from exc
-        except WSError as exc:
+        except WSError as exc:        # must precede OSError — WSError is a subclass
             sock.close()
             self.last_error = str(exc)
             raise
+        except OSError as exc:        # genuine socket failure
+            sock.close()
+            self.last_error = f"handshake failed ({exc})"
+            raise WSError(self.last_error) from exc
 
         # Blocking recv in the drain thread; the timeout only guarded connect.
         sock.settimeout(None)
@@ -220,7 +220,12 @@ class WSClient:
                 return
             self._last_msg = time.monotonic()
             if op == OP_PING:
-                self._raw_send(payload, OP_PONG)
+                try:
+                    self._raw_send(payload, OP_PONG)
+                except (WSError, OSError) as exc:
+                    if not self._stop.is_set():
+                        self.last_error = f"pong failed ({exc})"
+                    return
             elif op == OP_CLOSE:
                 self.last_error = "server closed the connection"
                 return

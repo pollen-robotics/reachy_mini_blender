@@ -121,6 +121,15 @@ class TestWSClient(unittest.TestCase):
         finally:
             bad.stop()
 
+    def test_bad_accept_key_error_message_is_exact(self):
+        bad = FakeDaemon(bad_accept=True).start()
+        try:
+            with self.assertRaises(client.WSError):
+                self.c.connect("127.0.0.1", bad.port, timeout=1.0)
+            self.assertEqual(self.c.last_error, "bad Sec-WebSocket-Accept")
+        finally:
+            bad.stop()
+
     def test_send_full_target_payload_is_exact(self):
         self.c.connect("127.0.0.1", self.daemon.port)
         head = [1.0, 0.0, 0.0, 0.0,
@@ -166,12 +175,12 @@ class TestWSClient(unittest.TestCase):
     def test_ping_is_answered_with_pong(self):
         self.c.connect("127.0.0.1", self.daemon.port)
         self.daemon.send_ping()
-        # A pong is a control frame, not JSON, so assert via liveness instead:
-        # the client must still be usable and connected afterwards.
-        time.sleep(0.1)
-        self.c.send_full_target(body_yaw=0.0)
-        self.assertTrue(self.daemon.wait_for(1))
-        self.assertTrue(self.c.is_connected())
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if "pong" in self.daemon.control:
+                break
+            time.sleep(0.005)
+        self.assertIn("pong", self.daemon.control)
 
     def test_server_message_refreshes_liveness(self):
         self.c.connect("127.0.0.1", self.daemon.port)

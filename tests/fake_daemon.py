@@ -15,15 +15,17 @@ class FakeDaemon:
     close handshake niceties.
     """
 
-    def __init__(self, bad_handshake=False):
+    def __init__(self, bad_handshake=False, bad_accept=False):
         self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._srv.bind(("127.0.0.1", 0))
         self._srv.listen(1)
         self.port = self._srv.getsockname()[1]
         self.received = []
+        self.control = []
         self.conn = None
         self._bad_handshake = bad_handshake
+        self._bad_accept = bad_accept
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._serve, daemon=True)
 
@@ -48,10 +50,13 @@ class FakeDaemon:
                 conn.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
                 return
             key = re.search(rb"Sec-WebSocket-Key:\s*(\S+)", req, re.I).group(1).decode()
+            accept_value = client.accept_key(key)
+            if self._bad_accept:
+                accept_value = "AAAAAAAAAAAAAAAAAAAAAA=="  # Wrong value
             conn.sendall(
                 b"HTTP/1.1 101 Switching Protocols\r\n"
                 b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
-                b"Sec-WebSocket-Accept: " + client.accept_key(key).encode() + b"\r\n\r\n"
+                b"Sec-WebSocket-Accept: " + accept_value.encode() + b"\r\n\r\n"
             )
             while not self._stop.is_set():
                 try:
@@ -60,6 +65,8 @@ class FakeDaemon:
                     return
                 if op == client.OP_TEXT:
                     self.received.append(json.loads(payload.decode()))
+                elif op == client.OP_PONG:
+                    self.control.append("pong")
                 elif op == client.OP_CLOSE:
                     return
         finally:
