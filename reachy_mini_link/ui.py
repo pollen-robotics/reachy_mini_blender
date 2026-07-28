@@ -10,6 +10,10 @@ import bpy
 from . import bake, rig, sync
 
 
+# Module-level state for test_pose timer-driven sequence.
+_test_state = {"client": None, "steps": [], "index": 0}
+
+
 class ReachyMiniLinkProps(bpy.types.PropertyGroup):
     """Per-scene settings, so a .blend remembers its host and output path."""
 
@@ -54,6 +58,36 @@ def _settings(props):
     )
 
 
+def _test_pose_tick():
+    """Issue one test pose per tick.
+
+    The daemon ignores a goto_target while another move is playing, so
+    steps must be spaced by at least the move duration. Returning the
+    delay (rather than sleeping) keeps Blender's UI responsive.
+    """
+    st = _test_state
+    client_obj = st["client"]
+    if client_obj is None:
+        return None
+    if st["index"] >= len(st["steps"]):
+        client_obj.disconnect()
+        st["client"] = None
+        print("[reachy-mini] test sequence complete")
+        return None
+    label, head, antennas, body_yaw, duration = st["steps"][st["index"]]
+    st["index"] += 1
+    try:
+        client_obj.send_goto_target(head=head, antennas=antennas,
+                                    body_yaw=body_yaw, duration=duration)
+    except ConnectionError as exc:
+        print(f"[reachy-mini] test sequence aborted: {exc}")
+        client_obj.disconnect()
+        st["client"] = None
+        return None
+    print(f"[reachy-mini] test pose: {label}")
+    return duration + 0.5   # margin so the daemon has finished the move
+
+
 class REACHY_MINI_OT_sync_start(bpy.types.Operator):
     """Connect to the daemon and start mirroring the rig"""
 
@@ -89,6 +123,13 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
     bl_label = "Send test pose"
 
     def execute(self, context):
+        global _test_state
+
+        # Guard: do not start a second sequence if one is already running.
+        if _test_state["client"] is not None:
+            self.report({"INFO"}, "Test sequence already running")
+            return {"CANCELLED"}
+
         props = context.scene.reachy_mini_link
         from . import client
 
@@ -104,13 +145,13 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
 
         # Each step is 2 s so a human can see which way the robot moved.
         steps = [
-            ("neutral", head(), [0.0, 0.0], 0.0),
-            ("+Z 20mm", head(dz=0.02), [0.0, 0.0], 0.0),
-            ("+X 20mm", head(dx=0.02), [0.0, 0.0], 0.0),
-            ("right antenna +45", head(), [math.radians(45.0), 0.0], 0.0),
-            ("left antenna +45", head(), [0.0, math.radians(45.0)], 0.0),
-            ("body yaw +30", head(), [0.0, 0.0], math.radians(30.0)),
-            ("neutral", head(), [0.0, 0.0], 0.0),
+            ("neutral", head(), [0.0, 0.0], 0.0, 2.0),
+            ("+Z 20mm", head(dz=0.02), [0.0, 0.0], 0.0, 2.0),
+            ("+X 20mm", head(dx=0.02), [0.0, 0.0], 0.0, 2.0),
+            ("right antenna +45", head(), [math.radians(45.0), 0.0], 0.0, 2.0),
+            ("left antenna +45", head(), [0.0, math.radians(45.0)], 0.0, 2.0),
+            ("body yaw +30", head(), [0.0, 0.0], math.radians(30.0), 2.0),
+            ("neutral", head(), [0.0, 0.0], 0.0, 2.0),
         ]
 
         conn = client.WSClient()
@@ -118,18 +159,21 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
             conn.connect(props.host, props.port)
             conn.set_automatic_body_yaw(False)
             conn.set_torque(True)
-            for label, h, ant, yaw in steps:
-                print(f"[reachy-mini] test pose: {label}")
-                conn.send_goto_target(head=h, antennas=ant, body_yaw=yaw, duration=2.0)
-                # goto_target is fire-and-forget; the daemon interpolates. A
-                # blocking wait here would freeze the UI, so the sequence is
-                # queued and the console log names each step for the observer.
         except ConnectionError as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
-            return {"CANCELLED"}
-        finally:
             conn.disconnect()
-        self.report({"INFO"}, "Test sequence sent; watch the simulator")
+            return {"CANCELLED"}
+
+        # Store client and steps in module state for the timer to drive.
+        _test_state["client"] = conn
+        _test_state["steps"] = steps
+        _test_state["index"] = 0
+
+        # Register timer if not already registered.
+        if not bpy.app.timers.is_registered(_test_pose_tick):
+            bpy.app.timers.register(_test_pose_tick, first_interval=0.0)
+
+        self.report({"INFO"}, "Test sequence queued; watch the simulator console")
         return {"FINISHED"}
 
 
@@ -227,7 +271,16 @@ def register():
 
 
 def unregister():
-    # Stop the loop before tearing down the classes it reports status through.
+    global _test_state
+
+    # Clean up the test sequence timer and connection before tearing down.
+    if bpy.app.timers.is_registered(_test_pose_tick):
+        bpy.app.timers.unregister(_test_pose_tick)
+    if _test_state["client"] is not None:
+        _test_state["client"].disconnect()
+        _test_state["client"] = None
+
+    # Stop the sync loop before tearing down the classes it reports status through.
     sync.stop()
     if hasattr(bpy.types.Scene, "reachy_mini_link"):
         del bpy.types.Scene.reachy_mini_link
