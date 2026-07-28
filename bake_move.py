@@ -40,12 +40,16 @@ start = flag("--start")
 end = flag("--end")
 
 scene = bpy.context.scene
-move = bake.bake(
-    scene,
-    description=description,
-    frame_start=int(start) if start else None,
-    frame_end=int(end) if end else None,
-)
-bake.write_move(out, move)
+try:
+    move = bake.bake(
+        scene,
+        description=description,
+        frame_start=int(start) if start else None,
+        frame_end=int(end) if end else None,
+    )
+    bake.write_move(out, move)
+except ValueError as exc:
+    print(f"ERROR: {exc}")
+    sys.exit(1)
 print(f"DONE -> {out}  ({len(move['time'])} frames, "
       f"{move['time'][-1]:.3f}s @ {scene.render.fps / scene.render.fps_base:g} fps)")

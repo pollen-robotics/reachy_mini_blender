@@ -33,6 +33,16 @@ def bake(scene, mapping=None, description="", frame_start=None, frame_end=None):
     start = scene.frame_start if frame_start is None else frame_start
     end = scene.frame_end if frame_end is None else frame_end
 
+    # RecordedMove derives dt as (time[-1] - time[0]) / len(time): fewer than
+    # 2 frames gives an empty file (RecordedMove.__init__ raises IndexError
+    # on timestamps[-1]) or a single frame with dt == duration == 0.0
+    # (RecordedMove.evaluate raises for every t). Both would otherwise write
+    # a file that "succeeds" but is unusable.
+    if end - start + 1 < 2:
+        raise ValueError(
+            f"bake range must cover at least 2 frames, got start={start} "
+            f"end={end}")
+
     # Blender stores a rational frame rate; fps_base is 1.001 for 23.976 etc.
     fps = scene.render.fps / scene.render.fps_base
 
@@ -62,7 +72,8 @@ def write_move(path, move):
 
     Resolves Blender's // relative-to-blend prefix, so the UI's default
     "//moves/untitled.json" lands next to the .blend rather than in the
-    process's working directory.
+    process's working directory. Returns the resolved absolute path, so
+    callers can report where the file actually landed.
     """
     if isinstance(path, str) and path.startswith("//"):
         path = bpy.path.abspath(path)
@@ -72,3 +83,4 @@ def write_move(path, move):
         os.makedirs(parent, exist_ok=True)
     with open(path, "w") as fh:
         json.dump(move, fh, indent=1)
+    return path
