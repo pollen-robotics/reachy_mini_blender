@@ -11,6 +11,11 @@ provenance in docs/RIG_MAPPING.md. The short version:
              +Z, so it really is yaw
   - antennas Antenna.{R,L}.002 + .003 local Z summed, because the two bones
              are collinear continuations of the robot's single hinge
+
+Head.001's rotation is orthonormalised (via a quaternion round-trip) before
+being sent: the robot has no scale degree of freedom, so any bone scale
+picked up on that control (e.g. an artist pressing S instead of G) is
+projected out rather than shipped as a non-orthonormal, invalid IK target.
 """
 
 from dataclasses import dataclass
@@ -117,7 +122,12 @@ def read(depsgraph, mapping=None):
     # rotation about the neutral head origin plus a translation offset from it,
     # so the translation must be the plain origin delta. The composed form
     # cur @ rst.inverted() would give p_cur - R*p_rest instead.
-    rotation = cur.to_3x3() @ rst.to_3x3().inverted()
+    #
+    # The quaternion round-trip discards any bone scale on Head.001: the
+    # robot has no scale DOF, and a non-orthonormal 3x3 (e.g. from scaling
+    # the control instead of moving it) would be an invalid IK target sent
+    # to the robot with no error.
+    rotation = (cur.to_3x3() @ rst.to_3x3().inverted()).to_quaternion().to_matrix()
     translation = (cur.translation - rst.translation) * m.head_scale
     head = Matrix.Translation(translation) @ rotation.to_4x4()
 
