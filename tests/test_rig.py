@@ -142,6 +142,14 @@ class TestHeadPose(unittest.TestCase):
         angle = state.head.to_3x3().to_quaternion().angle
         self.assertAlmostEqual(math.degrees(angle), 15.0, delta=0.01)
 
+    def test_bone_scale_does_not_leak_into_head_rotation(self):
+        # The robot has no scale DOF. A non-orthonormal rotation block (e.g.
+        # from an artist pressing S instead of G on Head.001) must be
+        # projected back to a pure rotation rather than sent as-is.
+        bpy.data.objects["Armature"].pose.bones["Head.001"].scale = (1.5, 1.5, 1.5)
+        state = read()
+        self.assertAlmostEqual(state.head.to_3x3().determinant(), 1.0, delta=1e-6)
+
     def test_body_yaw_rotates_head_in_base_frame(self):
         # Critical: Head.001 is parented under Core. When the body yaws, the
         # head must rotate in the base frame. This test catches the bug where

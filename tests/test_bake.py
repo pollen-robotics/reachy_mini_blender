@@ -17,6 +17,7 @@ def reset_pose():
     for pb in arm.pose.bones:
         pb.location = (0.0, 0.0, 0.0)
         pb.rotation_euler = (0.0, 0.0, 0.0)
+        pb.scale = (1.0, 1.0, 1.0)
     bpy.context.view_layer.update()
 
 
@@ -61,7 +62,7 @@ class TestBakeSchema(unittest.TestCase):
 
     def test_head_is_nested_not_flat(self):
         # Guards the wire-vs-file format asymmetry.
-        sample = bake.bake(self.scene, frame_start=1, frame_end=1)["set_target_data"][0]
+        sample = bake.bake(self.scene, frame_start=1, frame_end=2)["set_target_data"][0]
         self.assertIsInstance(sample["head"][0], list)
 
     def test_defaults_to_scene_frame_range(self):
@@ -74,6 +75,18 @@ class TestBakeSchema(unittest.TestCase):
         self.scene.frame_set(42)
         bake.bake(self.scene, frame_start=1, frame_end=3)
         self.assertEqual(self.scene.frame_current, 42)
+
+    def test_reversed_range_raises_value_error(self):
+        # end < start yields an empty range, which would otherwise write an
+        # unusable {"time": [], "set_target_data": []} move file.
+        with self.assertRaises(ValueError):
+            bake.bake(self.scene, frame_start=5, frame_end=3)
+
+    def test_single_frame_range_raises_value_error(self):
+        # A single frame gives dt == duration == 0.0, which RecordedMove
+        # cannot evaluate.
+        with self.assertRaises(ValueError):
+            bake.bake(self.scene, frame_start=1, frame_end=1)
 
 
 class TestBakeCapturesAnimation(unittest.TestCase):
@@ -91,8 +104,12 @@ class TestBakeCapturesAnimation(unittest.TestCase):
 
     def tearDown(self):
         arm = bpy.data.objects["Armature"]
-        if arm.animation_data and arm.animation_data.action:
-            arm.animation_data_clear()
+        # Must NOT use animation_data_clear(): drivers live in the same
+        # AnimData block as the action, so that call also deletes the rig's
+        # three calibration drivers (Core + both antenna sliders), which the
+        # test_rig suite depends on. Clear only the action.
+        if arm.animation_data:
+            arm.animation_data.action = None
         reset_pose()
 
     def test_body_yaw_changes_across_frames(self):
