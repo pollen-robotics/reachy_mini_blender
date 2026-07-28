@@ -50,7 +50,7 @@ class TestReadFrame(unittest.TestCase):
             head = bytearray([0x80 | opcode])
             if n < 126:
                 head.append(n)
-            elif n < 65516:
+            elif n < 65536:
                 head.append(126)
                 head += struct.pack(">H", n)
             else:
