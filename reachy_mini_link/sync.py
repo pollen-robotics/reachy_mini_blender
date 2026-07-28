@@ -59,8 +59,14 @@ def _read_state():
 def start(settings):
     """Connect, arm the robot, ease in, then begin streaming.
 
-    Raises ConnectionError if the daemon cannot be reached; the caller is
-    expected to surface last_error. Leaves state clean on failure.
+    Raises:
+        client.WSError: a ConnectionError subclass, if the daemon cannot be
+            reached or the handshake fails.
+        rig.RigError: if the rig mapping does not match the armature — for
+            example a renamed bone — which surfaces on the ease-in read.
+
+    Leaves module state clean and the socket closed on either failure; the
+    caller should surface `last_error` / get_status().
     """
     global _client, _settings, _running
     if _running:
@@ -104,9 +110,9 @@ def _teardown():
 
     Split out from stop() because _tick must never unregister itself: a timer
     callback stops by returning None, and calling unregister on the currently
-    executing timer is not something to rely on. _tick calls _teardown and
-    returns None; stop() — always called from an operator, never from inside
-    the tick — unregisters and then calls _teardown.
+    executing timer is not something to rely on. _tick calls _fail which calls
+    _teardown and returns None; stop() — always called from an operator, never
+    from inside the tick — unregisters and then calls _teardown.
     """
     global _client, _running
     _running = False
@@ -161,4 +167,6 @@ def _tick():
     except client.WSError as exc:
         return _fail(str(exc))
 
+    # max(1.0, ...) is a divide-by-zero and runaway guard: rates below 1 Hz
+    # are clamped to 1 Hz rather than honoured.
     return 1.0 / max(1.0, _settings.rate_hz)
