@@ -319,6 +319,9 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         box.label(text="Export Move")
         box.prop(props, "description")
         box.prop(props, "out_path")
+        if not bpy.data.filepath and props.out_path.startswith("//"):
+            box.label(text="Save the .blend first, or use an absolute path",
+                     icon="ERROR")
         box.prop(props, "use_scene_range")
         if not props.use_scene_range:
             row = box.row(align=True)

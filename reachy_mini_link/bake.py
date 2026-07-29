@@ -71,11 +71,19 @@ def write_move(path, move):
     """Write a move dict as JSON, creating parent directories as needed.
 
     Resolves Blender's // relative-to-blend prefix, so the UI's default
-    "//moves/untitled.json" lands next to the .blend rather than in the
-    process's working directory. Returns the resolved absolute path, so
-    callers can report where the file actually landed.
+    "//moves/untitled.json" lands next to the .blend -- but only once the
+    .blend has been saved. Before the first save, bpy.data.filepath is ''
+    and bpy.path.abspath cannot resolve //, so a // path raises ValueError
+    instead of silently writing next to the process's working directory.
+    Returns the resolved absolute path, so callers can report where the
+    file actually landed.
     """
     if isinstance(path, str) and path.startswith("//"):
+        if not bpy.data.filepath:
+            raise ValueError(
+                f"output path '{path}' is relative to the .blend, but this "
+                ".blend has not been saved yet. Save the .blend first, or "
+                "set an absolute output path.")
         path = bpy.path.abspath(path)
     path = os.path.abspath(path)
     parent = os.path.dirname(path)

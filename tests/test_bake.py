@@ -6,10 +6,26 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 import bpy
 
 from reachy_mini_link import bake
+
+
+def _fake_filepath(path):
+    """Context manager standing in for `bpy.data.filepath == path`.
+
+    bpy.data.filepath is a read-only bpy_struct property: mock.patch.object
+    on bpy.data itself raises "attribute is read-only" even for the
+    duration of a patch (Blender enforces this at the C level, not just on
+    plain assignment). Patching the `data` attribute of the `bpy` module
+    instead works, because bake.write_move and bpy.path.abspath both look
+    it up as `bpy.data.filepath` at call time, and `bpy` is an ordinary
+    Python module whose attributes mock.patch.object CAN reassign.
+    """
+    return mock.patch.object(bpy, "data", SimpleNamespace(filepath=path))
 
 
 def reset_pose():
@@ -137,6 +153,49 @@ class TestWriteMove(unittest.TestCase):
     def test_is_json_serialisable_with_plain_floats(self):
         move = bake.bake(bpy.context.scene, frame_start=1, frame_end=2)
         json.dumps(move)   # must not raise on mathutils types
+
+    def test_returns_resolved_absolute_path(self):
+        move = bake.bake(bpy.context.scene, frame_start=1, frame_end=2)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "sub", "io.json")
+            resolved = bake.write_move(path, move)
+        self.assertEqual(resolved, os.path.abspath(path))
+
+    def test_double_slash_path_with_unsaved_blend_raises_value_error(self):
+        # Reproduces the bug report: an unsaved .blend leaves bpy.data.filepath
+        # == '', so bpy.path.abspath cannot resolve "//" and previously left
+        # a relative path for os.path.abspath to resolve against the process
+        # cwd (e.g. "/" from a desktop launcher), causing a surprising write
+        # attempt outside the repo/home directory.
+        move = bake.bake(bpy.context.scene, frame_start=1, frame_end=2)
+        with _fake_filepath(""):
+            with self.assertRaises(ValueError) as ctx:
+                bake.write_move("//moves/untitled.json", move)
+        self.assertIn("save", str(ctx.exception).lower())
+
+    def test_double_slash_path_with_saved_blend_resolves_next_to_it(self):
+        move = bake.bake(bpy.context.scene, frame_start=1, frame_end=2)
+        with tempfile.TemporaryDirectory() as d:
+            fake_blend = os.path.join(d, "fake.blend")
+            with _fake_filepath(fake_blend):
+                resolved = bake.write_move("//moves/untitled.json", move)
+            expected = os.path.join(d, "moves", "untitled.json")
+            self.assertEqual(resolved, expected)
+            with open(expected) as fh:
+                loaded = json.load(fh)
+        self.assertEqual(len(loaded["time"]), 2)
+
+    def test_absolute_path_works_with_unsaved_blend(self):
+        # The documented workaround for the "//" + unsaved-blend case.
+        move = bake.bake(bpy.context.scene, frame_start=1, frame_end=2)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "untitled.json")
+            with _fake_filepath(""):
+                resolved = bake.write_move(path, move)
+            self.assertEqual(resolved, os.path.abspath(path))
+            with open(path) as fh:
+                loaded = json.load(fh)
+        self.assertEqual(len(loaded["time"]), 2)
 
 
 if __name__ == "__main__":
