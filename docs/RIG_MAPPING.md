@@ -130,7 +130,9 @@ antennas : 0.11 × 28.56  = 3.1416 rad = ±180.0°  (= ±π)
 
 ## Rig ranges vs robot ranges
 
-The rig is authored to the robot's real limits, so no clamping is needed in code.
+The rig is authored to the robot's real limits for the **rotational/scalar channels** —
+`body_yaw` and the antennas — so no clamping is needed in code for those. Head
+translation is the exception; see "Head translation workspace" below.
 
 | Rig constraint | Rig value | Robot source | Robot value |
 |---|---|---|---|
@@ -143,6 +145,11 @@ The rig is authored to the robot's real limits, so no clamping is needed in code
 All have `use_transform_limit=True`, so interactive posing is clamped in the channel too.
 Verified: pushing `Head.001` to `(0.9, −0.9, 0.9)` yields a pose translation of
 `(0.234, −0.234, 0.278)`.
+
+`Head.001`'s `LIMIT_DISTANCE` row above, unlike the other three, is **not** a robot-range
+calibration — it is roughly 7× looser than the Stewart platform's confirmed workspace, so
+it does not keep head translation inside what the robot can actually reach. See "Head
+translation workspace" below for the confirmed numbers and practical guidance.
 
 ## Scale
 
@@ -165,6 +172,50 @@ length.
 The robot's kinematics adds the **+0.177 m Z offset internally**
 (`placo_kinematics.py:130,344`), so neutral is plain identity and the offset must **not**
 be baked into what we send.
+
+## Simulator-confirmed values
+
+Measured 2026-07-29 against a live `reachy-mini-daemon --sim` and a screencast of the
+MuJoCo viewer.
+
+| Channel | Sign | Evidence |
+|---|---|---|
+| `body_yaw` | **+1** (default correct, no flip) | Commanding +30° gave `head_joint_positions[0]` delta `+0.5223` rad (+29.9°); commanding −30° gave `−0.5223` rad. `head_joint_positions[0]` is the body-yaw joint, matching the MJCF actuator order (`yaw_body`, then `stewart_1..6`). |
+| `antennas[0]` (right) | **+1**, no swap | Commanding `[45°, 0]` gave `antennas_joint_positions [0.7856, 0.0]`. Independently, the screencast shows this step moves the viewer-**left** antenna, which is the robot's own right since the robot faces the camera. |
+| `antennas[1]` (left) | **+1**, no swap | Commanding `[0, 45°]` gave `[-0.0, 0.7857]`; the screencast shows the viewer-**right** antenna moving. |
+
+**`HEAD_TRANSLATION_SCALE = 0.4575` retained**, but honestly: it is derived from the two
+geometric anchors above (neutral head origin `0.177 / 0.3869 = 0.45748`; body width
+`0.160 / 0.3554 = 0.45020`, agreeing to 1.6%) and is **not independently confirmed on
+hardware** — the readback commands synthetic metres, so it cannot distinguish the
+rig-to-metres factor from a correctly-scaled identity. What *is* confirmed is that the
+wire's units themselves are 1:1 metres: commanding 20 mm on each axis reported
+`+0.0198` / `+0.0198` / `+0.0199` m back on the matching axis, with negligible cross-talk.
+
+Also confirmed: neutral reports `t ≈ (0, 0, −0.0001)` m, consistent with the "+0.177 m Z
+offset removed on output" claim above — it must not be baked into what we send.
+
+## Head translation workspace
+
+Measured saturation of the Stewart platform (commanded vs. achieved, sim), 2026-07-29:
+
+| Axis | Achieved max | Equivalent rig movement at scale 0.4575 |
+|---|---|---|
+| +Z | 0.0231 m (23 mm) | 0.050 BU |
+| +X | 0.0364 m (36 mm) | 0.080 BU |
+| +Y | 0.0482 m (48 mm) | 0.105 BU |
+
+Raw tracking data for +Z: commanded `0.010 -> 0.0098`; `0.020 -> 0.0199`; `0.030 -> 0.0231`
+(saturated); `0.050 -> 0.0231`; `0.080 -> 0.0231`.
+
+`Head.001`'s `LIMIT_DISTANCE` permits **0.3633 BU** — roughly **7×** beyond what the robot
+can reach vertically. So the rig's constraint does **not** confine head translation to the
+robot's workspace: an artist moving `Head.001` freely will silently saturate the robot —
+it simply stops following while Blender keeps moving, with nothing surfaced as an error.
+
+**Practical guidance:** keep `Head.001` translation within roughly **±0.05 BU** for motion
+the robot can actually reproduce. The limit is axis-dependent — Z is the tightest, X and Y
+allow somewhat more (see table above).
 
 ## Mechanism bones (read by nothing; they follow)
 

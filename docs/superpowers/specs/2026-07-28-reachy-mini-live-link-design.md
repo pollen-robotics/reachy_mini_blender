@@ -256,7 +256,8 @@ Rotations need **no** scaling: they are already exact (see below).
 
 The rig's own constraints are applied in the pose the add-on reads (verified above:
 pushing `Head.001` to `(0.9, -0.9, 0.9)` yields a clamped `(0.234, -0.234, 0.278)`) — and
-the rig is authored to the robot's ranges:
+the rig is authored to the robot's ranges for the **rotational/scalar channels**
+(`body_yaw`, antennas). Head translation is excluded from this claim; see below.
 
 | Rig constraint | Value | Robot |
 |---|---|---|
@@ -266,8 +267,18 @@ the rig is authored to the robot's ranges:
 | `Head.001` `LIMIT_DISTANCE` | 0.3633 inside, vs `Core` | head workspace |
 
 All four have `use_transform_limit=True`, so interactive posing is clamped in the
-channel too. There is therefore nothing left to clamp and **no sign/scale calibration UI
-to build**. `HEAD_TRANSLATION_SCALE` is the single exception.
+channel too. There is nothing left to clamp for `body_yaw` and the antennas, and no
+sign/scale calibration UI to build for those. `HEAD_TRANSLATION_SCALE` is a separate,
+already-accounted-for exception (single scale constant).
+
+**Head translation is not similarly bounded to the robot's workspace.** Sim-confirmed
+(2026-07-29, `docs/RIG_MAPPING.md`'s "Head translation workspace"): `Head.001`'s
+`LIMIT_DISTANCE` (0.3633 BU) permits roughly **7×** beyond the Stewart platform's
+confirmed vertical reach (23 mm ≈ 0.05 BU at scale 0.4575; X and Y allow a little more).
+So an artist posing `Head.001` freely can silently saturate the robot — it stops
+following while Blender keeps moving, with nothing surfaced as an error. This is a
+documented limitation of the rig's authored range, not a code defect; the practical
+mitigation is to keep `Head.001` translation within roughly ±0.05 BU.
 
 ### Antennas
 

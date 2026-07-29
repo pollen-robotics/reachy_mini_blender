@@ -80,6 +80,11 @@ a known sequence (translations, a head roll, antenna sweeps, body yaw) and confi
 robot moves the way you expect — direction, sign and scale — before pointing Start Sync
 at a physical robot.
 
+Note that `Head.001` translation has only a small usable range — about ±0.05 BU in
+Blender, ~23 mm on the robot vertically — before the robot silently saturates: it stops
+following while Blender keeps moving. Large head translations in Blender will not be
+reproduced on the robot; see `docs/RIG_MAPPING.md` for the confirmed numbers.
+
 ### Exporting a move
 
 Set Description and Output path in the "Export Move" section of the panel (or leave
