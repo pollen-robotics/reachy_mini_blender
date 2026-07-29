@@ -86,8 +86,13 @@ def main():
     ap.add_argument("--no-wait", action="store_true")
     a = ap.parse_args()
 
-    with open(a.move_file) as fh:
-        move = json.load(fh)
+    try:
+        with open(a.move_file) as fh:
+            move = json.load(fh)
+    except OSError as exc:
+        sys.exit(f"ERROR: cannot read {a.move_file}: {exc.strerror}")
+    except ValueError as exc:
+        sys.exit(f"ERROR: {a.move_file} is not valid JSON: {exc}")
     for key in ("time", "set_target_data"):
         if key not in move:
             sys.exit(f"ERROR: {a.move_file} is not a move file (no {key!r} key)")

@@ -13,6 +13,9 @@ and a script to export it to glTF.
 - `reachy_mini_link/` — the "Reachy Mini Live Link" add-on: mirror the rig to a running
   Reachy Mini daemon and bake the timeline to a move file.
 - `bake_move.py` — headless equivalent of the add-on's Export Move button.
+- `play_move.py` — replay a baked move on the robot, without needing the SDK installed.
+- `tools/blend_guard.py` — checks whether a run modified `reachy_mini.blend`, without
+  ever reverting it. See `docs/WORKING_ON_THIS_REPO.md`.
 
 ## Exporting
 
@@ -97,9 +100,26 @@ move duration plus a margin — worth knowing if you're scripting the daemon dir
 
 ### Exporting a move
 
-Set Description and Output path in the "Export Move" section of the panel (or leave
-"Use scene frame range" checked to bake the scene's frame range), then click **Export
-Move**.
+Use the panel — the "Export Move" section of the "Reachy Mini" sidebar tab:
+
+| Field | Meaning |
+|---|---|
+| **Description** | stored in the file's `description`; this is what identifies the move to the robot's move libraries, not the filename |
+| **Output** | a Blender path, so `//` means *relative to the .blend*. Missing directories are created |
+| **Use scene frame range** | on: use the scene's `frame_start`/`frame_end`. Off: exposes explicit **Start** / **End** fields for exporting a slice |
+
+Then click **Export Move**. The status bar reports the resolved absolute path and the
+frame count. Your current frame is restored afterwards, so exporting is invisible to the
+rest of your session — and no robot or daemon is involved, since it reads the rig.
+
+Two things it will refuse rather than write something broken:
+
+- A range of fewer than 2 frames. A single-frame or reversed range produces a file the
+  robot's loader cannot play, so it errors instead.
+- A `//` output path while the .blend is **unsaved**. `//` has nothing to resolve against
+  before the first save, and the path would silently fall through to the process working
+  directory. Save the .blend, or give an absolute path. The panel warns about this before
+  you click.
 
 Headlessly, from the shell:
 
@@ -116,6 +136,65 @@ Flags (after `--`):
 | `--description TEXT` | move description (default: the output filename stem) |
 | `--start N` | first frame (default: scene `frame_start`) |
 | `--end N` | last frame (default: scene `frame_end`) |
+
+### Replaying a move on the robot
+
+`play_move.py` is the counterpart to `bake_move.py`. Blender is not involved:
+
+```bash
+python3 play_move.py moves/wave.json
+python3 play_move.py moves/wave.json --host 192.168.1.42   # a real robot
+```
+
+```
+playing moves/wave.json: 49 frames, 2.00s (+1.0s ease-in)
+  started (daemon reports 2.00s)
+  finished
+```
+
+| flag | effect |
+|------|--------|
+| `--host HOST` | daemon host (default `localhost`) |
+| `--port PORT` | daemon port (default `8000`) |
+| `--ease-in SECS` | interpolate to the move's first frame before playing (default `1.0`; `0` starts abruptly from wherever the head is) |
+| `--freq HZ` | daemon playback tick rate (default `100`) |
+| `--no-wait` | return as soon as playback is requested |
+
+It uploads the move to the daemon and asks the daemon to play it, so the daemon owns the
+playback loop — interpolation, the tick, the Stewart IK. Nothing streams frames at it,
+which also means playback outlives the script (hence `--no-wait`). Like the add-on it
+needs no SDK install: plain `python3`, standard library only, reusing
+`reachy_mini_link/client.py`.
+
+It waits on the daemon's own playback events rather than assuming the upload landed. That
+matters because a rejected upload slot is dropped *silently* server-side, so a naive
+upload-and-play would look successful while doing nothing.
+
+**Stop Sync first** if Blender is live-mirroring — otherwise its 50 Hz stream fights the
+playback (see the warning above).
+
+#### Or with the SDK
+
+If you want the camera, audio, IMU or face tracking in the same script, use the SDK
+instead. It must run on the SDK's own interpreter, not system `python3`:
+
+```python
+import asyncio, json, sys
+from reachy_mini import ReachyMini
+from reachy_mini.motion.recorded_move import RecordedMove
+
+move = RecordedMove(json.load(open(sys.argv[1])))
+with ReachyMini(media_backend="no_media") as mini:
+    mini.set_automatic_body_yaw(False)
+    mini.enable_motors()
+    asyncio.run(mini.async_play_move(move, initial_goto_duration=1.0))
+```
+
+Three non-obvious points: `async_play_move` is the only playback entry point, so
+`asyncio.run` is required; `media_backend="no_media"` skips the WebRTC/GStreamer stack,
+which otherwise floods the terminal with audio-device errors irrelevant to motion; and
+`set_automatic_body_yaw(False)` is needed or the daemon overrides the body yaw your move
+recorded. Both routes go through the same daemon playback path, so the motion is identical.
 
 ### Running the tests
 
