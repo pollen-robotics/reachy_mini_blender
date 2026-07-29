@@ -30,6 +30,17 @@ from mathutils import Matrix
 # (0.160 m / 0.3554 BU = 0.45020). See docs/RIG_MAPPING.md.
 HEAD_TRANSLATION_SCALE = 0.4575
 
+# Change of basis: Base bone-local -> robot frame (X forward, Y left, Z up).
+# A Blender bone's local Y runs ALONG the bone, and `Base` runs along world
+# +Z, so the bone frame is NOT the robot frame:
+#     Base localX -> world +X, localY -> world +Z, localZ -> world -Y
+# Hence (vx, vy, vz)_bonelocal -> (-vz, -vx, vy)_robot.
+# Verified against the rig: forward -> +X, up -> +Z, robot-left -> +Y, and
+# all three rotation axes map correctly. det = +1, orthonormal.
+BASE_TO_ROBOT = Matrix(((0, 0, -1),
+                        (-1, 0, 0),
+                        (0, 1, 0)))
+
 
 class RigError(RuntimeError):
     """A mapped bone or object is missing — usually a renamed rig."""
@@ -127,8 +138,10 @@ def read(depsgraph, mapping=None):
     # robot has no scale DOF, and a non-orthonormal 3x3 (e.g. from scaling
     # the control instead of moving it) would be an invalid IK target sent
     # to the robot with no error.
-    rotation = (cur.to_3x3() @ rst.to_3x3().inverted()).to_quaternion().to_matrix()
-    translation = (cur.translation - rst.translation) * m.head_scale
+    rotation = (BASE_TO_ROBOT
+                @ (cur.to_3x3() @ rst.to_3x3().inverted()).to_quaternion().to_matrix()
+                @ BASE_TO_ROBOT.transposed())
+    translation = (BASE_TO_ROBOT @ (cur.translation - rst.translation)) * m.head_scale
     head = Matrix.Translation(translation) @ rotation.to_4x4()
 
     # -- body yaw ------------------------------------------------------

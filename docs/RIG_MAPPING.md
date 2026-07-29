@@ -27,7 +27,7 @@ Only these bones are meant to be touched. Everything else is mechanism that foll
 
 | Robot DOF | Units | Rig source | Extraction |
 |---|---|---|---|
-| `head` (4×4 pose) | m + rotation | `Head.001` relative to `Base` | `R = R_cur @ R_rest⁻¹` ; `t = (p_cur − p_rest) × 0.4575` |
+| `head` (4×4 pose) | m + rotation | `Head.001` relative to `Base` | `R = C @ (R_cur @ R_rest⁻¹) @ Cᵀ` ; `t = C @ (p_cur − p_rest) × 0.4575`, `C = BASE_TO_ROBOT` (see below) |
 | `body_yaw` | rad | `Core` | `rotation_euler[1]` |
 | `antennas[0]` (right) | rad | `Antenna.R.002` + `Antenna.R.003` | sum of `rotation_euler[2]` |
 | `antennas[1]` (left) | rad | `Antenna.L.002` + `Antenna.L.003` | sum of `rotation_euler[2]` |
@@ -54,6 +54,53 @@ Y). These agree: `Core` runs from `z=0.0676` to `z=0.1728`, so its along-bone ax
 `Head.001` is parented under `Core`, so yawing the body carries the head and the
 base-frame head pose correctly *includes* that rotation — which is physically what the
 robot does, and hands the IK a consistent head+yaw pair.
+
+### `BASE_TO_ROBOT`: `Base`'s bone-local frame is not the robot frame
+
+The head pose above is computed *relative to `Base`'s bone-local frame* — i.e. in the
+coordinate system where `Base`'s own local X/Y/Z axes are the basis vectors. That frame is
+**not** the robot's REP-103 convention (+X forward, +Y left, +Z up), because a Blender
+bone's local Y always runs *along the bone*, and `Base` itself runs along world +Z, not
+world +X. Concretely:
+
+```
+Base localX -> world +X
+Base localY -> world +Z
+Base localZ -> world -Y
+```
+
+So a raw bone-local delta must be rotated into the robot frame before it is sent, via:
+
+```
+(vx, vy, vz)_bonelocal -> (-vz, -vx, vy)_robot
+```
+
+`rig.py` encodes this as the constant `BASE_TO_ROBOT` (a 3×3 change-of-basis matrix,
+`det = +1`, orthonormal) and applies it to **both** the rotation and the translation
+halves of the head pose — the rotation via conjugation (`BASE_TO_ROBOT @ R @
+BASE_TO_ROBOT.transposed()`, the correct way to re-express a rotation in a new basis, not
+`BASE_TO_ROBOT @ R` alone) and the translation via a plain multiply.
+
+**Evidence this is the right basis, not merely a plausible one:**
+
+- The rig's face is visible only when looking from rig +Y toward −Y — i.e. rig +Y is the
+  model's forward direction, which the robot calls +X.
+- `Antenna.L` sits at rig −X — the robot's left antenna, so rig −X is the robot's +Y
+  (left).
+- All three rotation axes independently confirm the same mapping (bone-local X → world
+  X → robot pitch axis at −Y; bone-local Y → world Z → robot yaw axis at +Z; bone-local Z
+  → world −Y → robot roll axis at −X), consistent with the single change-of-basis matrix
+  above.
+
+Without this correction, a head move that is physically **forward** (rig +Y) is reported
+to the robot as **down** (`z = -0.01373` for a 3 cm move), and a move that is physically
+**up** is reported as **left** (`y = +0.01373`) — the rotation and translation deltas were
+being shipped verbatim in the wrong basis.
+
+`body_yaw` and the two antennas are **not** affected: they are scalar rotations read
+directly off a single bone axis (`Core` local Y = world Z, `Antenna.*` local Z = the
+antenna's own hinge axis), not vectors or matrices expressed in `Base`'s frame, so there
+is no basis to convert.
 
 ## Driver constants
 

@@ -9,7 +9,7 @@ import math
 import unittest
 
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from reachy_mini_link import rig
 
@@ -127,11 +127,15 @@ class TestHeadPose(unittest.TestCase):
         cur = base_pose.inverted() @ head_pose
         rst = base_rest.inverted() @ head_rest
 
-        expected_t = (cur.translation - rst.translation) * rig.HEAD_TRANSLATION_SCALE
+        # Both forms are re-expressed in the robot frame via BASE_TO_ROBOT
+        # (see rig.py) before comparison with the pose actually returned.
+        expected_t = rig.BASE_TO_ROBOT @ (
+            (cur.translation - rst.translation) * rig.HEAD_TRANSLATION_SCALE)
         self.assertAlmostEqual((state.head.translation - expected_t).length, 0.0,
                                delta=1e-9)
 
-        naive = (cur @ rst.inverted()).translation * rig.HEAD_TRANSLATION_SCALE
+        naive = rig.BASE_TO_ROBOT @ (
+            (cur @ rst.inverted()).translation * rig.HEAD_TRANSLATION_SCALE)
         self.assertGreater((naive - expected_t).length, 1e-5,
                            "test is vacuous unless the two forms actually differ")
 
@@ -165,6 +169,81 @@ class TestHeadPose(unittest.TestCase):
                                msg="head rotation should contain body yaw")
         self.assertAlmostEqual(state.body_yaw, 1.269300, delta=1e-5,
                                msg="body yaw should be independently correct")
+
+    # -- BASE_TO_ROBOT: bone-local frame is not the robot frame -----------
+    #
+    # A Blender bone's local Y runs ALONG the bone, and `Base` runs along
+    # world +Z, so `Base`'s bone-local frame is NOT the robot's REP-103
+    # frame (+X forward, +Y left, +Z up). These tests move/rotate Head.001
+    # along known WORLD directions and check the reported pose lands on the
+    # correct ROBOT axis. Without BASE_TO_ROBOT (i.e. the old, buggy code)
+    # these fail: e.g. moving forward would report a -Z (down) translation
+    # instead of +X.
+
+    def _move_head_world(self, world_dir):
+        """Move Head.001 by 3cm along a WORLD direction.
+
+        The pose bone's `location` is in bone-local space, so the world
+        direction must be converted through the rest matrix first.
+        """
+        arm = bpy.data.objects["Armature"]
+        pb = arm.pose.bones["Head.001"]
+        rest3 = arm.data.bones["Head.001"].matrix_local.to_3x3()
+        pb.location = rest3.inverted() @ Vector(world_dir).normalized() * 0.03
+        return read()
+
+    def test_translation_forward_maps_to_robot_plus_x(self):
+        # Rig +Y is the rig's forward/face direction.
+        t = self._move_head_world((0.0, 1.0, 0.0)).head.translation
+        expected = 0.03 * rig.HEAD_TRANSLATION_SCALE  # 0.013725
+        self.assertAlmostEqual(t.x, expected, delta=1e-5)
+        self.assertAlmostEqual(t.y, 0.0, delta=1e-6)
+        self.assertAlmostEqual(t.z, 0.0, delta=1e-6)
+
+    def test_translation_up_maps_to_robot_plus_z(self):
+        t = self._move_head_world((0.0, 0.0, 1.0)).head.translation
+        expected = 0.03 * rig.HEAD_TRANSLATION_SCALE
+        self.assertAlmostEqual(t.z, expected, delta=1e-5)
+        self.assertAlmostEqual(t.x, 0.0, delta=1e-6)
+        self.assertAlmostEqual(t.y, 0.0, delta=1e-6)
+
+    def test_translation_robot_left_maps_to_robot_plus_y(self):
+        # Rig -X is where Antenna.L sits -- the robot's left, i.e. robot +Y.
+        t = self._move_head_world((-1.0, 0.0, 0.0)).head.translation
+        expected = 0.03 * rig.HEAD_TRANSLATION_SCALE
+        self.assertAlmostEqual(t.y, expected, delta=1e-5)
+        self.assertAlmostEqual(t.x, 0.0, delta=1e-6)
+        self.assertAlmostEqual(t.z, 0.0, delta=1e-6)
+
+    def test_rotation_bone_local_y_is_robot_yaw(self):
+        # Head.001 bone-local Y == world Z; a +20deg turn there must appear
+        # as yaw about robot Z.
+        pb = bpy.data.objects["Armature"].pose.bones["Head.001"]
+        pb.rotation_euler[1] = math.radians(20.0)
+        euler = read().head.to_3x3().to_euler('XYZ')
+        self.assertAlmostEqual(math.degrees(euler.x), 0.0, delta=0.01)
+        self.assertAlmostEqual(math.degrees(euler.y), 0.0, delta=0.01)
+        self.assertAlmostEqual(math.degrees(euler.z), 20.0, delta=0.01)
+
+    def test_rotation_bone_local_x_is_robot_pitch(self):
+        # Head.001 bone-local X == world X; a +20deg turn there must appear
+        # as pitch, euler XYZ ~= (0, -20, 0) deg.
+        pb = bpy.data.objects["Armature"].pose.bones["Head.001"]
+        pb.rotation_euler[0] = math.radians(20.0)
+        euler = read().head.to_3x3().to_euler('XYZ')
+        self.assertAlmostEqual(math.degrees(euler.x), 0.0, delta=0.01)
+        self.assertAlmostEqual(math.degrees(euler.y), -20.0, delta=0.01)
+        self.assertAlmostEqual(math.degrees(euler.z), 0.0, delta=0.01)
+
+    def test_rotation_bone_local_z_is_robot_roll(self):
+        # Head.001 bone-local Z == world -Y; a +20deg turn there must appear
+        # as roll, euler XYZ ~= (-20, 0, 0) deg.
+        pb = bpy.data.objects["Armature"].pose.bones["Head.001"]
+        pb.rotation_euler[2] = math.radians(20.0)
+        euler = read().head.to_3x3().to_euler('XYZ')
+        self.assertAlmostEqual(math.degrees(euler.x), -20.0, delta=0.01)
+        self.assertAlmostEqual(math.degrees(euler.y), 0.0, delta=0.01)
+        self.assertAlmostEqual(math.degrees(euler.z), 0.0, delta=0.01)
 
 
 class TestSerialisation(unittest.TestCase):

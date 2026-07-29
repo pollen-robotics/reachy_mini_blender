@@ -198,20 +198,36 @@ Two things that look like inconsistencies but are not:
 
 ### Head pose construction
 
-Rotation and translation are assembled **independently**:
+**Correction (found after the per-task reviews below, via a simulator screencast):**
+the text originally here computed `R` and `t` in `Base`'s bone-local axes and sent them
+as if that *were* the robot frame. It is not. A Blender bone's local Y runs *along the
+bone*, and `Base` runs along world +Z (not world +X), so `Base` bone-local axes relate to
+world axes as `localX -> world +X`, `localY -> world +Z`, `localZ -> world -Y` — a
+different basis from the robot's REP-103 convention (+X forward, +Y left, +Z up). Sending
+the bone-local delta unrotated meant a physically-forward head move (rig +Y) was reported
+to the robot as **down**, and a physically-up move was reported as **left** — confirmed
+by driving the rig from known axes in the `--sim` MuJoCo viewer and watching the robot
+move the wrong way.
+
+The fix is a change-of-basis matrix `BASE_TO_ROBOT` (`rig.py`), applied to *both* halves
+of the independently-assembled pose:
 
 ```
-R = R_cur @ R_rest.inverted()      # rotation delta, in Base axes
-t = (p_cur - p_rest) * SCALE       # origin delta, in Base axes, metres
+C = BASE_TO_ROBOT                        # Base bone-local -> robot frame; det=+1, orthonormal
+R = C @ (R_cur @ R_rest.inverted()) @ C.transposed()   # rotation delta, conjugated into robot axes
+t = C @ ((p_cur - p_rest) * SCALE)       # origin delta, rotated into robot axes, metres
 pose = Matrix.Translation(t) @ R.to_4x4()
 ```
 
-Explicitly **not** `M_cur @ M_rest.inverted()`, whose translation would be
-`p_cur − R·p_rest`. The robot defines the pose as a rotation about the neutral head
-origin plus a translation offset from it (the kinematics adds +0.177 m Z internally),
-which is what the independent assembly produces. Both forms give identity at rest, so
-this only diverges once the head is simultaneously rotated and translated — a case the
-tests must cover.
+Rotation and translation are still assembled **independently** — that part of the
+original design was correct and unaffected by this fix. Explicitly **not** `M_cur @
+M_rest.inverted()`, whose translation would be `p_cur − R·p_rest`. The robot defines the
+pose as a rotation about the neutral head origin plus a translation offset from it (the
+kinematics adds +0.177 m Z internally), which is what the independent assembly produces.
+Both forms give identity at rest, so this only diverges once the head is simultaneously
+rotated and translated — a case the tests must cover. See `docs/RIG_MAPPING.md` for the
+full derivation and evidence for `BASE_TO_ROBOT` (face visible only from rig +Y;
+`Antenna.L` at rig −X = robot +Y).
 
 `Head.001` is parented under `Core`, so yawing the body carries the head and the
 base-frame head pose correctly includes that rotation. This is physically what the robot
