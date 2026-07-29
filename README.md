@@ -85,6 +85,16 @@ Blender, ~23 mm on the robot vertically — before the robot silently saturates:
 following while Blender keeps moving. Large head translations in Blender will not be
 reproduced on the robot; see `docs/RIG_MAPPING.md` for the confirmed numbers.
 
+**Only one client should stream to the daemon at a time.** If a second client streams
+simultaneously — a forgotten Blender session with Start Sync still on, or a desktop app —
+the daemon applies whichever target arrived last, so the two fight and the robot appears
+to track sluggishly or drift back toward a neutral pose. That looks exactly like a
+saturation or calibration problem but isn't one. Press **Stop Sync** when you're done, and
+if the robot ever behaves like this, check for a stale connection with
+`ss -tnp | grep :8000`. Separately, the daemon ignores a `goto_target` that arrives while
+another move is still playing, which is why the add-on spaces its test-pose steps by the
+move duration plus a margin — worth knowing if you're scripting the daemon directly.
+
 ### Exporting a move
 
 Set Description and Output path in the "Export Move" section of the panel (or leave

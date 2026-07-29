@@ -132,7 +132,8 @@ antennas : 0.11 × 28.56  = 3.1416 rad = ±180.0°  (= ±π)
 
 The rig is authored to the robot's real limits for the **rotational/scalar channels** —
 `body_yaw` and the antennas — so no clamping is needed in code for those. Head
-translation is the exception; see "Head translation workspace" below.
+translation is the exception; see "Head workspace: translation is tight, rotation is
+generous" below.
 
 | Rig constraint | Rig value | Robot source | Robot value |
 |---|---|---|---|
@@ -149,7 +150,8 @@ Verified: pushing `Head.001` to `(0.9, −0.9, 0.9)` yields a pose translation o
 `Head.001`'s `LIMIT_DISTANCE` row above, unlike the other three, is **not** a robot-range
 calibration — it is roughly 7× looser than the Stewart platform's confirmed workspace, so
 it does not keep head translation inside what the robot can actually reach. See "Head
-translation workspace" below for the confirmed numbers and practical guidance.
+workspace: translation is tight, rotation is generous" below for the confirmed numbers
+and practical guidance.
 
 ## Scale
 
@@ -184,6 +186,25 @@ MuJoCo viewer.
 | `antennas[0]` (right) | **+1**, no swap | Commanding `[45°, 0]` gave `antennas_joint_positions [0.7856, 0.0]`. Independently, the screencast shows this step moves the viewer-**left** antenna, which is the robot's own right since the robot faces the camera. |
 | `antennas[1]` (left) | **+1**, no swap | Commanding `[0, 45°]` gave `[-0.0, 0.7857]`; the screencast shows the viewer-**right** antenna moving. |
 
+Head **rotation** was previously unverified against hardware; two independent
+confirmations settle it, alongside the sign checks above:
+
+**(a) Rig-driven** — posing `Head.001` about a world axis in Blender, streaming through
+`rig.read()`, and reading the robot's `head_pose` back:
+
+| Artist rotates in Blender | Commanded | Robot achieved | Axis |
+|---|---|---|---|
+| 20° about world Z | 20.0° | 19.1° | robot Z (yaw) |
+| 15° about world Y (the front axis) | 15.0° | 14.4° | robot X (roll) |
+| 15° about world X (the side axis) | −15.0° | −13.7° | robot Y (pitch) |
+
+Every response landed on the correct axis, confirming `BASE_TO_ROBOT`'s rotation
+conjugation end to end.
+
+**(b)** Independently, the `send_test_pose` operator's own roll step (a pure `Rx(15°)`
+with zero translation) achieves 14.10° — so that step is a valid visual check, not just
+a qualitative "did it move" sanity check.
+
 **`HEAD_TRANSLATION_SCALE = 0.4575` retained**, but honestly: it is derived from the two
 geometric anchors above (neutral head origin `0.177 / 0.3869 = 0.45748`; body width
 `0.160 / 0.3554 = 0.45020`, agreeing to 1.6%) and is **not independently confirmed on
@@ -195,7 +216,9 @@ wire's units themselves are 1:1 metres: commanding 20 mm on each axis reported
 Also confirmed: neutral reports `t ≈ (0, 0, −0.0001)` m, consistent with the "+0.177 m Z
 offset removed on output" claim above — it must not be baked into what we send.
 
-## Head translation workspace
+## Head workspace: translation is tight, rotation is generous
+
+### Translation
 
 Measured saturation of the Stewart platform (commanded vs. achieved, sim), 2026-07-29:
 
@@ -213,9 +236,30 @@ can reach vertically. So the rig's constraint does **not** confine head translat
 robot's workspace: an artist moving `Head.001` freely will silently saturate the robot —
 it simply stops following while Blender keeps moving, with nothing surfaced as an error.
 
-**Practical guidance:** keep `Head.001` translation within roughly **±0.05 BU** for motion
-the robot can actually reproduce. The limit is axis-dependent — Z is the tightest, X and Y
-allow somewhat more (see table above).
+### Rotation
+
+Unlike translation, head **rotation shows no saturation up to 40° on any axis**, with a
+tracking ratio of 0.93–0.99 throughout (commanded vs. achieved, sim, 2026-07-29):
+
+| Commanded | roll (X) | pitch (Y) | yaw (Z) |
+|---|---|---|---|
+| 5° | 4.65 | 4.63 | 4.85 |
+| 15° | 14.44 | 14.46 | 14.66 |
+| 30° | 29.14 | 29.55 | 29.37 |
+| 40° | 38.46 | 38.64 | 38.83 |
+
+### Practical guidance
+
+The two channels are not symmetric. Head **translation** is the constrained channel — it
+saturates well inside the rig's own permitted range (+Z tops out at 23 mm, ≈0.05 BU in
+Blender). Head **rotation** is generous — it tracks accurately to at least 40° on every
+axis with no sign of saturation. Expressive head motion should therefore be authored
+primarily as **rotation**; large **translations** will silently clip, with nothing
+surfaced as an error.
+
+Keep `Head.001` translation within roughly **±0.05 BU** for motion the robot can actually
+reproduce. The limit is axis-dependent — Z is the tightest, X and Y allow somewhat more
+(see the translation table above).
 
 ## Mechanism bones (read by nothing; they follow)
 
