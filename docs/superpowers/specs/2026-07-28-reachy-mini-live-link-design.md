@@ -272,7 +272,7 @@ sign/scale calibration UI to build for those. `HEAD_TRANSLATION_SCALE` is a sepa
 already-accounted-for exception (single scale constant).
 
 **Head translation is not similarly bounded to the robot's workspace.** Sim-confirmed
-(2026-07-29, `docs/RIG_MAPPING.md`'s "Head translation workspace"): `Head.001`'s
+(2026-07-29, `docs/RIG_MAPPING.md`'s "Head workspace: translation is tight, rotation is generous"): `Head.001`'s
 `LIMIT_DISTANCE` (0.3633 BU) permits roughly **7×** beyond the Stewart platform's
 confirmed vertical reach (23 mm ≈ 0.05 BU at scale 0.4575; X and Y allow a little more).
 So an artist posing `Head.001` freely can silently saturate the robot — it stops
