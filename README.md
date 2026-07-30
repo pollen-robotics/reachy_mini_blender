@@ -17,6 +17,102 @@ and a script to export it to glTF.
 - `tools/blend_guard.py` — checks whether a run modified `reachy_mini.blend`, without
   ever reverting it. See `docs/WORKING_ON_THIS_REPO.md`.
 
+## Installing
+
+### Requirements
+
+| | |
+|---|---|
+| Blender | **5.1** is the only tested version. Earlier 4.x releases probably work — nothing here uses a 5.x-only API — but are unverified. |
+| Git LFS | **required before cloning**, see below |
+| Python packages | none for the add-on or the CLI scripts — standard library only |
+| `reachy_mini` SDK | only if you want a local simulator, or the optional SDK playback route |
+
+### 1. Clone — install Git LFS first
+
+3D assets (`.blend`, `.glb`, `.gltf`, `.fbx`, `.obj`, `.stl`, `.ply`, `.dae`, `.abc`,
+`.usd*`) are tracked with [Git LFS](https://git-lfs.com/). Install it **before** cloning,
+or `reachy_mini.blend` arrives as a ~130-byte pointer file that Blender cannot open:
+
+```bash
+sudo apt install git-lfs        # or: brew install git-lfs
+git lfs install                 # once per user
+
+git clone git@github.com:pollen-robotics/reachy_mini_blender.git
+cd reachy_mini_blender
+git checkout feat/reachy-mini-live-link
+```
+
+The `git checkout` is **required until that branch is merged**: `main` currently holds only
+the rig and `export_gltf.py`, with no add-on.
+
+Check the blend is a real file, not a pointer — it should be about 17 MB:
+
+```bash
+ls -lh reachy_mini.blend
+```
+
+If you cloned before installing LFS, fix it in place rather than re-cloning:
+
+```bash
+git lfs install && git lfs pull
+```
+
+### 2. Install the add-on
+
+The add-on is the `reachy_mini_link/` folder. Build a zip whose top level contains
+`reachy_mini_link/` (not its contents directly):
+
+```bash
+zip -r reachy_mini_link.zip reachy_mini_link -x "*__pycache__*" "*.pyc"
+```
+
+Then in Blender: `Edit > Preferences > Add-ons > Install from Disk`, pick the zip, tick
+**"Reachy Mini Live Link"**, and Save Preferences. A "Reachy Mini" tab appears in the 3D
+viewport sidebar (`N`).
+
+There is nothing to `pip install`. The add-on speaks the daemon's `/ws/sdk` WebSocket
+directly using only the Python standard library (see `reachy_mini_link/client.py`) —
+which is deliberate, because Blender's isolated interpreter cannot have the SDK's
+compiled wheels installed into it.
+
+**If you are working on the add-on**, symlink instead of installing, so the installed
+copy can never drift from your checkout:
+
+```bash
+ln -s "$PWD/reachy_mini_link" ~/.config/blender/5.1/scripts/addons/reachy_mini_link
+```
+
+Two caveats with the symlink: `ln -s` will not replace an existing directory, so remove
+any previously-installed copy first; and Python caches imported modules, so after editing
+code you still need to disable/re-enable the add-on (or restart Blender) for changes to
+take effect. Adjust `5.1` to your Blender version.
+
+### 3. Something to talk to
+
+The add-on drives no hardware itself — it only talks to a Reachy Mini daemon. Either run
+one locally with the SDK:
+
+```bash
+pip install reachy-mini
+reachy-mini-daemon --sim          # MuJoCo simulator
+```
+
+…or leave the SDK out entirely and point the panel's Host field at a daemon running
+elsewhere — a real robot, or another machine.
+
+### 4. Check it works
+
+```bash
+python3 -m unittest tests.test_client                                        # 20, no Blender
+blender --background reachy_mini.blend --python tests/run_blender_tests.py   # 41, in Blender
+```
+
+Worth running on a new machine: it is the quickest way to confirm the LFS pull, the rig
+and the driver constants are all intact before trusting anything to hardware. The Blender
+run prints which copy of the package it tested — check that line says your checkout, not
+an installed copy.
+
 ## Exporting
 
 ```bash
@@ -46,19 +142,7 @@ blender --background reachy_mini.blend --python export_gltf.py -- \
 An add-on that streams the rig live to a running Reachy Mini daemon, and bakes the
 timeline to a move file the robot's SDK can replay.
 
-### Installing
-
-The add-on is the `reachy_mini_link/` folder — no dependencies, no `pip install`. It
-speaks the daemon's `/ws/sdk` WebSocket directly with only the Python standard library
-(see `reachy_mini_link/client.py`), which matters because Blender's isolated interpreter
-cannot have the SDK's compiled wheels installed into it.
-
-1. Zip the `reachy_mini_link/` folder (the zip's top level must contain
-   `reachy_mini_link/`, not its contents directly).
-2. In Blender: `Edit > Preferences > Add-ons > Install...`, pick the zip, enable
-   "Reachy Mini Live Link".
-
-Tested only on **Blender 5.1**. Earlier 4.x releases may work but are unverified.
+See [Installing](#installing) above for setup.
 
 ### Running a live mirror
 
@@ -207,13 +291,14 @@ python3 -m unittest tests.test_move_roundtrip   # skips cleanly without the SDK
 blender --background reachy_mini.blend --python tests/run_blender_tests.py
 ```
 
-## Git LFS
+## Working on this repo
 
-3D assets (`.blend`, `.glb`, `.gltf`, `.fbx`, `.obj`, `.stl`, `.ply`, `.dae`,
-`.abc`, `.usd*`) are tracked with [Git LFS](https://git-lfs.com/). Install it
-before cloning so the files come down as real assets, not pointers:
+If you are changing the code, read `docs/WORKING_ON_THIS_REPO.md` first. It covers three
+traps this project has already hit: never revert `reachy_mini.blend` to satisfy a
+clean-tree check (it destroys saved animation work), an installed add-on copy silently
+shadowing your checkout in tests, and `Action.fcurves` no longer existing in Blender 5.1.
 
-```bash
-git lfs install
-git clone <repo-url>
-```
+Keep your animation work in a file **outside** the repo (`File > Save As`) so
+`reachy_mini.blend` stays a pristine rig asset and a 17 MB binary stays out of your diffs.
+
+Git LFS setup is covered under [Installing](#installing).
