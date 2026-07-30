@@ -70,8 +70,16 @@ class Mapping:
     antenna_r_bones: Tuple[str, ...] = ("Antenna.R.002", "Antenna.R.003")
     antenna_l_bones: Tuple[str, ...] = ("Antenna.L.002", "Antenna.L.003")
     antenna_axis: int = 2           # local Z, perpendicular to the shaft
-    antenna_r_sign: float = 1.0
-    antenna_l_sign: float = 1.0
+    # -1.0, not +1.0: the daemon's MuJoCo backend negates the antenna target
+    # relative to the rig's rotation direction, on BOTH write and read
+    # (daemon/backend/mujoco/backend.py:260,334), so commanded and reported
+    # values agree exactly and value-level readback tests cannot see the
+    # inversion -- it only shows up in the physical tip motion. Sign
+    # established by comparing measured tip-direction unit vectors (Blender
+    # vs. simulated robot); see docs/RIG_MAPPING.md. Both antennas need the
+    # same correction despite their different MJCF mounting quaternions.
+    antenna_r_sign: float = -1.0
+    antenna_l_sign: float = -1.0
 
     head_scale: float = HEAD_TRANSLATION_SCALE
 

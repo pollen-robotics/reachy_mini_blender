@@ -72,24 +72,50 @@ class TestAntennas(unittest.TestCase):
         reset_pose()
 
     def test_left_slider_drives_left_antenna(self):
+        # Value is negated (antenna_l_sign = -1.0): the daemon's MuJoCo
+        # backend negates the antenna target relative to the rig's rotation
+        # direction, symmetrically on write and read, so a readback-only
+        # check cannot see this -- it was found by comparing measured tip
+        # directions. Do NOT "fix" this back to +1.428000 to make the
+        # assertion match the raw bone value; see rig.py and
+        # docs/RIG_MAPPING.md.
         bpy.data.objects["Armature"].pose.bones["Slider.Rot.Antenna.L"].location[1] = 0.05
         state = read()
-        self.assertAlmostEqual(state.antennas[1], 1.428000, delta=1e-5)  # left
-        self.assertAlmostEqual(state.antennas[0], 0.0, delta=TOL)        # right
+        self.assertAlmostEqual(state.antennas[1], -1.428000, delta=1e-5)  # left
+        self.assertAlmostEqual(state.antennas[0], 0.0, delta=TOL)         # right
 
     def test_right_slider_drives_right_antenna(self):
+        # Negated for the same reason as the left antenna above -- see
+        # antenna_r_sign in rig.py and docs/RIG_MAPPING.md. Do not flip the
+        # sign back just to make this pass.
         bpy.data.objects["Armature"].pose.bones["Slider.Rot.Antenna.R"].location[1] = 0.05
         state = read()
-        self.assertAlmostEqual(state.antennas[0], 1.428000, delta=1e-5)
+        self.assertAlmostEqual(state.antennas[0], -1.428000, delta=1e-5)
         self.assertAlmostEqual(state.antennas[1], 0.0, delta=TOL)
 
     def test_fk_control_adds_to_the_slider(self):
         # .002 (slider-driven) and .003 (FK) are collinear with identical rest
-        # frames, so the robot's single hinge value is their sum.
+        # frames, so the robot's single hinge value is their sum -- and the
+        # antenna sign (see rig.py) is applied to that sum as a whole, not to
+        # each bone separately, so the expectation is -(1.428000 + 0.25), not
+        # -1.428000 + 0.25.
         arm = bpy.data.objects["Armature"]
         arm.pose.bones["Slider.Rot.Antenna.L"].location[1] = 0.05
         arm.pose.bones["Antenna.L.003"].rotation_euler[2] = 0.25
-        self.assertAlmostEqual(read().antennas[1], 1.428000 + 0.25, delta=1e-5)
+        self.assertAlmostEqual(read().antennas[1], -(1.428000 + 0.25), delta=1e-5)
+
+    def test_antenna_signs_are_negative(self):
+        # Pins the SIGN itself, not just a downstream value, so that
+        # resetting antenna_{r,l}_sign to +1.0 (the value that matches the
+        # raw rig-local rotation, but not the physical robot motion) fails
+        # loudly here. The daemon's MuJoCo backend negates the antenna
+        # target on both write and read (daemon/backend/mujoco/backend.py:
+        # 260,334), so readback-based checks agree perfectly regardless of
+        # this sign and cannot catch a regression -- only measured tip
+        # direction can. See rig.py and docs/RIG_MAPPING.md.
+        m = rig.Mapping()
+        self.assertLess(m.antenna_r_sign, 0.0)
+        self.assertLess(m.antenna_l_sign, 0.0)
 
 
 class TestHeadPose(unittest.TestCase):

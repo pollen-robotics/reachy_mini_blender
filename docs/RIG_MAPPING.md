@@ -29,8 +29,8 @@ Only these bones are meant to be touched. Everything else is mechanism that foll
 |---|---|---|---|
 | `head` (4×4 pose) | m + rotation | `Head.001` relative to `Base` | `R = C @ (R_cur @ R_rest⁻¹) @ Cᵀ` ; `t = C @ (p_cur − p_rest) × 0.4575`, `C = BASE_TO_ROBOT` (see below) |
 | `body_yaw` | rad | `Core` | `rotation_euler[1]` |
-| `antennas[0]` (right) | rad | `Antenna.R.002` + `Antenna.R.003` | sum of `rotation_euler[2]` |
-| `antennas[1]` (left) | rad | `Antenna.L.002` + `Antenna.L.003` | sum of `rotation_euler[2]` |
+| `antennas[0]` (right) | rad | `Antenna.R.002` + `Antenna.R.003` | `-(sum of rotation_euler[2])` |
+| `antennas[1]` (left) | rad | `Antenna.L.002` + `Antenna.L.003` | `-(sum of rotation_euler[2])` |
 
 Antenna order on the wire is **`[right, left]`**.
 
@@ -183,8 +183,60 @@ MuJoCo viewer.
 | Channel | Sign | Evidence |
 |---|---|---|
 | `body_yaw` | **+1** (default correct, no flip) | Commanding +30° gave `head_joint_positions[0]` delta `+0.5223` rad (+29.9°); commanding −30° gave `−0.5223` rad. `head_joint_positions[0]` is the body-yaw joint, matching the MJCF actuator order (`yaw_body`, then `stewart_1..6`). |
-| `antennas[0]` (right) | **+1**, no swap | Commanding `[45°, 0]` gave `antennas_joint_positions [0.7856, 0.0]`. Independently, the screencast shows this step moves the viewer-**left** antenna, which is the robot's own right since the robot faces the camera. |
-| `antennas[1]` (left) | **+1**, no swap | Commanding `[0, 45°]` gave `[-0.0, 0.7857]`; the screencast shows the viewer-**right** antenna moving. |
+| `antennas[0]` (right) | **−1** (see correction below) | See "Antenna sign: readback agreement was a false positive" below. |
+| `antennas[1]` (left) | **−1** (see correction below) | See "Antenna sign: readback agreement was a false positive" below. |
+
+### Antenna sign: readback agreement was a false positive
+
+The table above originally recorded antenna sign as **+1, no swap**, based on: commanding
+`[45°, 0]` giving `antennas_joint_positions [0.7856, 0.0]` back (and the mirror for the
+left antenna), plus a screencast showing the geometrically-correct antenna (viewer-left =
+robot-right, since the robot faces the camera) moving. **That conclusion was wrong.**
+
+The readback matched because the daemon's MuJoCo backend negates the antenna target on
+**both** the write and the read path:
+
+```
+daemon/backend/mujoco/backend.py:260   self.data.ctrl[-2:] = -self.target_antenna_joint_positions
+daemon/backend/mujoco/backend.py:334   return -pos          # get_present_antenna_joint_positions
+```
+
+Negating twice is the identity, so commanding `0.7854` rad reports back `0.7856` rad
+regardless of which physical direction the antenna actually swept. A readback-only check
+— command a value, read it back, compare — is structurally blind to a symmetric
+write/read sign flip like this one. That is the generalisable lesson: value-level
+round-trip verification can confirm magnitude and confirm *which* antenna moved (right vs.
+left), but it cannot confirm *direction*, whenever the same negation is applied on both
+sides of the wire.
+
+**What actually settles it** is the tip's physical displacement direction, not the
+reported joint value. Measured tip displacement for a +0.6 rad command, expressed as unit
+vectors in robot axes (+X forward, +Y left, +Z up) — Blender's rig tip vs. the simulated
+robot's actual tip (i.e. the MJCF joint driven to −0.6 rad by the backend's negation):
+
+```
+right:  blender [ 0.436 -0.828 -0.352]   robot actual [-0.507  0.829 -0.236]   dot = -0.824
+left:   blender [-0.507 -0.830 -0.234]   robot actual [ 0.436  0.829 -0.351]   dot = -0.826
+```
+
+Under the naive assumption of no backend negation the dot product is +1.000 exactly —
+which is what the original "+1, no swap" verification actually measured. A left/right
+*swap* (rather than a per-side negation) was also checked and is a worse fit (dot ≈
+−0.37), so this is confirmed to be a sign inversion, not a swap. The dot products land
+near −0.82 rather than exactly −1.0 because a hinge sweeps a cone: for ±θ the tip's
+component along the hinge axis itself doesn't change sign, so it isn't expected to reach
+−1.0 even with the correct sign — this is not evidence against the fix.
+
+`rig.py`'s `antenna_r_sign` / `antenna_l_sign` are therefore **−1.0**, not +1.0.
+
+**Unresolved caveat — simulator only, not hardware-confirmed:** the negation above lives
+in the *simulator* backend (`daemon/backend/mujoco/backend.py`). The real-robot backend
+(`daemon/backend/robot/backend.py:210`) passes the antenna target through **unnegated**.
+The most likely explanation is that the sim's negation exists specifically to make the
+simulated antenna's visual motion match the real robot's, in which case `-1.0` is correct
+for both backends and this rig. But that has only been verified against the MuJoCo
+simulator here — it has not been checked against physical hardware — so treat `-1.0` as
+sim-confirmed and hardware-unconfirmed until someone re-checks it on the real robot.
 
 Head **rotation** was previously unverified against hardware; two independent
 confirmations settle it, alongside the sign checks above:
