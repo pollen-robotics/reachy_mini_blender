@@ -7,7 +7,7 @@ import math
 
 import bpy
 
-from . import bake, rig, sync
+from . import bake, bridge, rig, sync
 
 
 # Module-level state for test_pose timer-driven sequence.
@@ -38,6 +38,11 @@ class ReachyMiniLinkProps(bpy.types.PropertyGroup):
     rate_hz: bpy.props.FloatProperty(
         name="Rate", default=50.0, min=1.0, max=120.0,
         description="Streaming rate in Hz. Takes effect on the next Start")
+
+    bridge_port: bpy.props.IntProperty(
+        name="Bridge port", default=9877, min=1024, max=65535,
+        description=("Local port The Animator web app connects to. "
+                     "Loopback only; nothing leaves this machine"))
 
     description: bpy.props.StringProperty(
         name="Description", default="untitled",
@@ -242,6 +247,43 @@ class REACHY_MINI_OT_cancel_test_pose(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class REACHY_MINI_OT_bridge_start(bpy.types.Operator):
+    """Expose the rig to The Animator web app (ws://127.0.0.1, local only)"""
+
+    bl_idname = "reachy_mini.bridge_start"
+    bl_label = "Start Bridge"
+
+    def execute(self, context):
+        props = context.scene.reachy_mini_link
+        settings = sync.Settings(
+            host="127.0.0.1",
+            port=props.bridge_port,
+            rate_hz=props.rate_hz,
+            mapping=_mapping(props),
+        )
+        try:
+            bridge.start(settings)
+        except OSError as exc:
+            self.report({"ERROR"},
+                        f"Reachy Mini: port {props.bridge_port} unavailable "
+                        f"({exc}). Another Blender running?")
+            return {"CANCELLED"}
+        self.report({"INFO"},
+                    f"Bridge listening on ws://127.0.0.1:{props.bridge_port}")
+        return {"FINISHED"}
+
+
+class REACHY_MINI_OT_bridge_stop(bpy.types.Operator):
+    """Stop the local bridge and disconnect the web app"""
+
+    bl_idname = "reachy_mini.bridge_stop"
+    bl_label = "Stop Bridge"
+
+    def execute(self, context):
+        bridge.stop()
+        return {"FINISHED"}
+
+
 class REACHY_MINI_OT_export_move(bpy.types.Operator):
     """Bake the timeline to a Reachy Mini move JSON"""
 
@@ -316,6 +358,28 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
                          icon="X")
 
         box = layout.box()
+        box.label(text="Local Bridge (The Animator)")
+        bphase, bmessage = bridge.get_status()
+        row = box.row()
+        row.enabled = not bridge.is_running()
+        row.prop(props, "bridge_port")
+        if bridge.is_running():
+            box.operator("reachy_mini.bridge_stop", text="Stop Bridge",
+                         icon="PAUSE")
+        else:
+            box.operator("reachy_mini.bridge_start", text="Start Bridge",
+                         icon="WORLD")
+        if bphase == "connected":
+            box.label(text=f"App connected ({bmessage})", icon="REC")
+        elif bphase == "listening":
+            box.label(text=f"Waiting for the app ({bmessage})",
+                      icon="RADIOBUT_ON")
+        elif bphase == "error":
+            box.label(text=bmessage or "error", icon="ERROR")
+        else:
+            box.label(text="Off", icon="RADIOBUT_OFF")
+
+        box = layout.box()
         box.label(text="Export Move")
         box.prop(props, "description")
         box.prop(props, "out_path")
@@ -340,6 +404,8 @@ _classes = (
     REACHY_MINI_OT_sync_stop,
     REACHY_MINI_OT_send_test_pose,
     REACHY_MINI_OT_cancel_test_pose,
+    REACHY_MINI_OT_bridge_start,
+    REACHY_MINI_OT_bridge_stop,
     REACHY_MINI_OT_export_move,
     REACHY_MINI_PT_link,
 )
@@ -356,8 +422,10 @@ def unregister():
     # Clean up the test sequence timer and connection before tearing down.
     _stop_test_pose()
 
-    # Stop the sync loop before tearing down the classes it reports status through.
+    # Stop the sync loop and the local bridge before tearing down the
+    # classes they report status through.
     sync.stop()
+    bridge.stop()
     if hasattr(bpy.types.Scene, "reachy_mini_link"):
         del bpy.types.Scene.reachy_mini_link
     for cls in reversed(_classes):
