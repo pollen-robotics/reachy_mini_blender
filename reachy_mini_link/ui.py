@@ -30,8 +30,11 @@ def _test_pose_in_flight():
 class ReachyMiniLinkProps(bpy.types.PropertyGroup):
     """Per-scene settings, so a .blend remembers its host and output path."""
 
+    # 127.0.0.1 rather than "localhost": on macOS localhost resolves to
+    # ::1 first, where something may accept TCP but never answer the WS
+    # handshake, and the connection times out instead of falling back.
     host: bpy.props.StringProperty(
-        name="Host", default="localhost",
+        name="Host", default="127.0.0.1",
         description="Daemon host. Use the robot's address for a remote robot")
     port: bpy.props.IntProperty(
         name="Port", default=8000, min=1, max=65535,
