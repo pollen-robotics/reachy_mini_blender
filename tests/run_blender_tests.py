@@ -1,8 +1,8 @@
 """Run the Blender-side test suites inside Blender's Python.
 
 Usage:
-  blender --background reachy_mini.blend --python tests/run_blender_tests.py
-  blender --background reachy_mini.blend --python tests/run_blender_tests.py -- test_rig
+  blender --background reachy_mini_link/assets/reachy_mini.blend --python tests/run_blender_tests.py
+  blender --background reachy_mini_link/assets/reachy_mini.blend --python tests/run_blender_tests.py -- test_rig
 
 Exits non-zero on failure so CI and shell && chains behave.
 """

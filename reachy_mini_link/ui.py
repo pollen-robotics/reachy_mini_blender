@@ -12,6 +12,10 @@ import bpy
 
 from . import audio, bake, discover, hub, play, rig, sync
 
+# The rigged model ships inside the add-on so installing the zip is the
+# whole setup - no separate .blend download.
+_ASSET_BLEND = pathlib.Path(__file__).parent / "assets" / "reachy_mini.blend"
+
 
 # Module-level state for test_pose timer-driven sequence.
 _test_state = {"client": None, "steps": [], "index": 0, "label": ""}
@@ -27,6 +31,40 @@ def _test_pose_in_flight():
     each path would silently eat the other.
     """
     return _test_state["client"] is not None
+
+
+class REACHY_MINI_OT_load_rig(bpy.types.Operator):
+    """Add the bundled Reachy Mini scene (rig + model) to this file
+and switch to it. Your other scenes are untouched"""
+
+    bl_idname = "reachy_mini.load_rig"
+    bl_label = "Load Reachy Mini Rig"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        if not _ASSET_BLEND.exists():
+            self.report({"ERROR"},
+                        f"Reachy Mini: bundled rig not found at {_ASSET_BLEND}")
+            return {"CANCELLED"}
+
+        # Append (not link) the whole scene: the armature, its widgets and
+        # the skinned model span several collections, so cherry-picking one
+        # would arrive broken. Appending also means saving stays in the
+        # user's own file - the bundled asset is never written to.
+        try:
+            with bpy.data.libraries.load(str(_ASSET_BLEND)) as (src, dst):
+                if "Scene" not in src.scenes:
+                    raise RuntimeError("no 'Scene' in the bundled rig file")
+                dst.scenes = ["Scene"]
+        except (RuntimeError, OSError) as exc:
+            self.report({"ERROR"}, f"Reachy Mini: {exc}")
+            return {"CANCELLED"}
+
+        scene = dst.scenes[0]
+        scene.name = "Reachy Mini"
+        context.window.scene = scene
+        self.report({"INFO"}, "Reachy Mini rig loaded - you are now in its scene")
+        return {"FINISHED"}
 
 
 class ReachyMiniLinkPrefs(bpy.types.AddonPreferences):
@@ -575,6 +613,15 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         test_running = _test_pose_in_flight()
         busy = syncing or test_running
 
+        # First contact: the file has no rig yet, so nothing below can do
+        # anything useful. Offer the bundled scene and keep the panel short.
+        if bpy.data.objects.get(_mapping(props).armature) is None:
+            box = layout.box()
+            box.label(text="No Reachy Mini rig in this file", icon="INFO")
+            row = box.row()
+            row.scale_y = 1.3
+            row.operator("reachy_mini.load_rig", icon="OUTLINER_OB_ARMATURE")
+
         # ── Robot: where it is, and the live link to it ────────────────
         box = layout.box()
         box.label(text="Robot", icon="TOOL_SETTINGS")
@@ -692,6 +739,7 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
 
 
 _classes = (
+    REACHY_MINI_OT_load_rig,
     ReachyMiniLinkPrefs,
     REACHY_MINI_OT_find_robot,
     REACHY_MINI_OT_publish_move,

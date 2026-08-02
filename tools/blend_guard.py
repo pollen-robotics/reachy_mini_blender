@@ -40,7 +40,9 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BLEND = os.path.join(ROOT, "reachy_mini.blend")
+# Repo-relative path of the rig asset; it ships inside the add-on package.
+BLEND_REL = "reachy_mini_link/assets/reachy_mini.blend"
+BLEND = os.path.join(ROOT, BLEND_REL)
 STATE_DIR = os.path.join(ROOT, ".superpowers")
 STATE = os.path.join(STATE_DIR, "blend_baseline")
 
@@ -60,7 +62,7 @@ def head_digest():
     so compare against the pointer's own recorded oid instead.
     """
     try:
-        blob = subprocess.run(["git", "-C", ROOT, "show", "HEAD:reachy_mini.blend"],
+        blob = subprocess.run(["git", "-C", ROOT, "show", f"HEAD:{BLEND_REL}"],
                               capture_output=True, check=True).stdout
     except (subprocess.CalledProcessError, OSError):
         return None

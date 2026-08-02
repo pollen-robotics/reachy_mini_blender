@@ -5,7 +5,7 @@ Blender's --python takes a file, not a module, so this file is the entry
 point, in the same idiom as export_gltf.py.
 
 Usage:
-  blender --background reachy_mini.blend --python bake_move.py -- \
+  blender --background reachy_mini_link/assets/reachy_mini.blend --python bake_move.py -- \
       --out moves/wave_hello.json --description wave_hello
 
 Flags (after --):

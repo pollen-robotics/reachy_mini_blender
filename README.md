@@ -7,7 +7,9 @@ and a script to export it to glTF.
 
 ## Contents
 
-- `reachy_mini.blend` — the rigged model (Stewart-platform neck IK, antennas, body).
+- `reachy_mini_link/assets/reachy_mini.blend` — the rigged model (Stewart-platform neck
+  IK, antennas, body). It lives inside the add-on package so the installed zip is
+  self-contained: the panel's **Load Reachy Mini Rig** button appends it into any file.
 - `export_gltf.py` — headless Blender script that exports the `MiniReachyRetopo`
   collection + armature to a `.glb`, baking the procedural materials to flat PBR.
 - `reachy_mini_link/` — the "Reachy Mini Live Link" add-on: mirror the rig to a running
@@ -49,7 +51,7 @@ the rig and `export_gltf.py`, with no add-on.
 Check the blend is a real file, not a pointer — it should be about 17 MB:
 
 ```bash
-ls -lh reachy_mini.blend
+ls -lh reachy_mini_link/assets/reachy_mini.blend
 ```
 
 If you cloned before installing LFS, fix it in place rather than re-cloning:
@@ -70,6 +72,11 @@ zip -r reachy_mini_link.zip reachy_mini_link -x "*__pycache__*" "*.pyc"
 Then in Blender: `Edit > Preferences > Add-ons > Install from Disk`, pick the zip, tick
 **"Reachy Mini Live Link"**, and Save Preferences. A "Reachy Mini" tab appears in the 3D
 viewport sidebar (`N`).
+
+The zip carries the rigged model with it, so it is the only thing an animator needs:
+in a file with no Reachy rig, the panel shows a **Load Reachy Mini Rig** button that
+appends the bundled scene (rig + model) and switches to it. Existing scenes are left
+untouched, and saving stays in the user's own file.
 
 There is nothing to `pip install`. The add-on speaks the daemon's `/ws/sdk` WebSocket
 directly using only the Python standard library (see `reachy_mini_link/client.py`) —
@@ -105,7 +112,7 @@ elsewhere — a real robot, or another machine.
 
 ```bash
 python3 -m unittest tests.test_client                                        # 20, no Blender
-blender --background reachy_mini.blend --python tests/run_blender_tests.py   # 41, in Blender
+blender --background reachy_mini_link/assets/reachy_mini.blend --python tests/run_blender_tests.py   # 41, in Blender
 ```
 
 Worth running on a new machine: it is the quickest way to confirm the LFS pull, the rig
@@ -116,7 +123,7 @@ an installed copy.
 ## Exporting
 
 ```bash
-blender --background reachy_mini.blend --python export_gltf.py
+blender --background reachy_mini_link/assets/reachy_mini.blend --python export_gltf.py
 ```
 
 Default output is `reachy_mini_viz.glb` (Y-up, Draco) next to the blend. Flags
@@ -133,7 +140,7 @@ Default output is `reachy_mini_viz.glb` (Y-up, Draco) next to the blend. Flags
 Example (lightweight, app-ready copy):
 
 ```bash
-blender --background reachy_mini.blend --python export_gltf.py -- \
+blender --background reachy_mini_link/assets/reachy_mini.blend --python export_gltf.py -- \
   --zup --no-uv --no-color --out /path/to/reachy_mini_viz.glb
 ```
 
@@ -147,7 +154,8 @@ See [Installing](#installing) above for setup.
 ### Running a live mirror
 
 1. Start a daemon. For the simulator: `reachy-mini-daemon --sim`.
-2. In the 3D viewport, open the sidebar (`N`) and select the "Reachy Mini" tab.
+2. In the 3D viewport, open the sidebar (`N`) and select the "Reachy Mini" tab. No rig
+   in the file yet? Click **Load Reachy Mini Rig** first.
 3. Set Host/Port in the "Robot" section and click **Start Live Sync**. The
    magnifier button probes `127.0.0.1` (Lite, local daemon) then
    `reachy-mini.local` (wireless, mDNS) and fills Host for you; if neither
@@ -255,7 +263,7 @@ Two things it will refuse rather than write something broken:
 Headlessly, from the shell:
 
 ```bash
-blender --background reachy_mini.blend --python bake_move.py -- \
+blender --background reachy_mini_link/assets/reachy_mini.blend --python bake_move.py -- \
     --out moves/wave.json --description wave
 ```
 
@@ -337,7 +345,7 @@ python3 -m unittest tests.test_client
 python3 -m unittest tests.test_move_roundtrip   # skips cleanly without the SDK
 
 # Inside Blender — rig reading and baking:
-blender --background reachy_mini.blend --python tests/run_blender_tests.py
+blender --background reachy_mini_link/assets/reachy_mini.blend --python tests/run_blender_tests.py
 ```
 
 ## Working on this repo
