@@ -148,8 +148,10 @@ See [Installing](#installing) above for setup.
 
 1. Start a daemon. For the simulator: `reachy-mini-daemon --sim`.
 2. In the 3D viewport, open the sidebar (`N`) and select the "Reachy Mini" tab.
-3. Set Host/Port in the "Robot" section (defaults to `127.0.0.1:8000`; use the
-   robot's IP or `reachy-mini.local` for a wireless one) and click **Start Live Sync**.
+3. Set Host/Port in the "Robot" section and click **Start Live Sync**. The
+   magnifier button probes `127.0.0.1` (Lite, local daemon) then
+   `reachy-mini.local` (wireless, mDNS) and fills Host for you; if neither
+   answers, type the IP shown in the mobile app.
 
 While syncing, drive the robot by posing the animator's control surface — everything
 else in the rig is mechanism that follows:

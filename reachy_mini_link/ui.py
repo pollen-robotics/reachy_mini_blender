@@ -9,7 +9,7 @@ import webbrowser
 
 import bpy
 
-from . import bake, hub, play, rig, sync
+from . import bake, discover, hub, play, rig, sync
 
 
 # Module-level state for test_pose timer-driven sequence.
@@ -72,6 +72,34 @@ def _hf_recheck(context):
         bpy.app.timers.register(do_redraw, first_interval=0.0)
 
     hub.check_async(prefs_token=_hf_prefs_token(context), on_done=redraw_later)
+
+
+class REACHY_MINI_OT_find_robot(bpy.types.Operator):
+    """Probe 127.0.0.1 and reachy-mini.local for a running daemon.
+If neither answers, type the IP shown in the mobile app into Host"""
+
+    bl_idname = "reachy_mini.find_robot"
+    bl_label = "Find Robot"
+
+    def execute(self, context):
+        port = context.scene.reachy_mini_link.port
+
+        def apply_later():
+            # Worker thread: get back on the main thread to touch bpy.
+            def apply():
+                if discover.state["status"] == "found":
+                    bpy.context.scene.reachy_mini_link.host = \
+                        discover.state["host"]
+                for window in bpy.context.window_manager.windows:
+                    for area in window.screen.areas:
+                        if area.type == "VIEW_3D":
+                            area.tag_redraw()
+                return None
+
+            bpy.app.timers.register(apply, first_interval=0.0)
+
+        discover.find_async(port=port, on_done=apply_later)
+        return {"FINISHED"}
 
 
 class REACHY_MINI_OT_hf_check(bpy.types.Operator):
@@ -424,8 +452,17 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         box.label(text="Robot", icon="TOOL_SETTINGS")
         col = box.column(align=True)
         col.enabled = not busy
-        col.prop(props, "host")
+        row = col.row(align=True)
+        row.prop(props, "host")
+        row.operator("reachy_mini.find_robot", text="", icon="VIEWZOOM")
         col.prop(props, "port")
+
+        dstate = discover.state["status"]
+        if dstate == "searching":
+            box.label(text="Looking for a robot…", icon="TIME")
+        elif dstate == "none":
+            box.label(text="No robot found - enter the IP from the mobile app",
+                      icon="INFO")
 
         row = box.row()
         row.scale_y = 1.3
@@ -508,6 +545,7 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
 
 _classes = (
     ReachyMiniLinkPrefs,
+    REACHY_MINI_OT_find_robot,
     REACHY_MINI_OT_hf_check,
     REACHY_MINI_OT_hf_token_page,
     ReachyMiniLinkProps,
