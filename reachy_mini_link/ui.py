@@ -43,12 +43,17 @@ class ReachyMiniLinkPrefs(bpy.types.AddonPreferences):
         description=("Hugging Face access token (write scope). Only needed "
                      "if you are not signed in with the hf CLI and have no "
                      "HF_TOKEN environment variable"))
+    dataset_name: bpy.props.StringProperty(
+        name="Dataset", default=hub.DATASET_DEFAULT,
+        description=("Dataset name Publish to Hub pushes into, created "
+                     "under your namespace on first use"))
 
     def draw(self, _context):
         layout = self.layout
         layout.prop(self, "hf_token")
         layout.label(text="Checked only if no hf CLI login or HF_TOKEN "
                           "env var is found.")
+        layout.prop(self, "dataset_name")
 
 
 def _hf_prefs_token(context):
@@ -99,6 +104,60 @@ If neither answers, type the IP shown in the mobile app into Host"""
             bpy.app.timers.register(apply, first_interval=0.0)
 
         discover.find_async(port=port, on_done=apply_later)
+        return {"FINISHED"}
+
+
+class REACHY_MINI_OT_publish_move(bpy.types.Operator):
+    """Bake the timeline and push it to your Hugging Face dataset"""
+
+    bl_idname = "reachy_mini.publish_move"
+    bl_label = "Publish to Hub"
+
+    def execute(self, context):
+        props = context.scene.reachy_mini_link
+        start = None if props.use_scene_range else props.frame_start
+        end = None if props.use_scene_range else props.frame_end
+        try:
+            move = bake.bake(
+                context.scene, mapping=_mapping(props),
+                description=props.description,
+                frame_start=start, frame_end=end,
+            )
+        except (rig.RigError, ValueError) as exc:
+            self.report({"ERROR"}, f"Reachy Mini: {exc}")
+            return {"CANCELLED"}
+
+        prefs = context.preferences.addons[__package__].preferences
+
+        def redraw_later():
+            def do_redraw():
+                for window in bpy.context.window_manager.windows:
+                    for area in window.screen.areas:
+                        if area.type == "VIEW_3D":
+                            area.tag_redraw()
+                return None
+
+            bpy.app.timers.register(do_redraw, first_interval=0.0)
+
+        hub.publish_move_async(
+            move,
+            dataset_name=prefs.dataset_name or hub.DATASET_DEFAULT,
+            prefs_token=prefs.hf_token,
+            on_done=redraw_later,
+        )
+        self.report({"INFO"}, "Publishing to the Hub…")
+        return {"FINISHED"}
+
+
+class REACHY_MINI_OT_open_dataset(bpy.types.Operator):
+    """Open the published dataset in your browser"""
+
+    bl_idname = "reachy_mini.open_dataset"
+    bl_label = "Open Dataset"
+
+    def execute(self, _context):
+        if hub.publish["url"]:
+            webbrowser.open(hub.publish["url"])
         return {"FINISHED"}
 
 
@@ -509,7 +568,22 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         if not bpy.data.filepath and props.out_path.startswith("//"):
             col.label(text="Save the .blend first, or use an absolute path",
                       icon="ERROR")
-        col.operator("reachy_mini.export_move", icon="FILE_TICK")
+        row = col.row(align=True)
+        row.operator("reachy_mini.export_move", icon="FILE_TICK")
+        sub = row.row(align=True)
+        sub.enabled = hub.state["status"] == "ok" \
+            and hub.publish["status"] != "working"
+        sub.operator("reachy_mini.publish_move", icon="URL")
+
+        pub = hub.publish
+        if pub["status"] == "working":
+            box.label(text="Publishing…", icon="TIME")
+        elif pub["status"] == "done":
+            row = box.row(align=True)
+            row.label(text=f"Published {pub['detail']}", icon="CHECKMARK")
+            row.operator("reachy_mini.open_dataset", text="", icon="URL")
+        elif pub["status"] == "error":
+            box.label(text=f"Publish failed: {pub['detail']}", icon="ERROR")
 
         # ── Hugging Face: sign-in state (publishing lands here) ────────
         box = layout.box()
@@ -546,6 +620,8 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
 _classes = (
     ReachyMiniLinkPrefs,
     REACHY_MINI_OT_find_robot,
+    REACHY_MINI_OT_publish_move,
+    REACHY_MINI_OT_open_dataset,
     REACHY_MINI_OT_hf_check,
     REACHY_MINI_OT_hf_token_page,
     ReachyMiniLinkProps,

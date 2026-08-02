@@ -15,16 +15,20 @@ dict, no bpy access), which the panel renders on its next redraw. The
 UI schedules that redraw itself; this module never touches Blender.
 """
 
+import base64
 import json
 import os
 import pathlib
+import re
 import ssl
 import threading
+import unicodedata
 import urllib.error
 import urllib.request
 
-WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
-TOKEN_PAGE_URL = "https://huggingface.co/settings/tokens"
+HUB_URL = "https://huggingface.co"
+WHOAMI_URL = f"{HUB_URL}/api/whoami-v2"
+TOKEN_PAGE_URL = f"{HUB_URL}/settings/tokens"
 
 _TOKEN_PATHS = (
     pathlib.Path.home() / ".cache" / "huggingface" / "token",
@@ -122,3 +126,128 @@ def check_async(prefs_token="", on_done=None):
             on_done()
 
     threading.Thread(target=run, daemon=True, name="reachy-hf-auth").start()
+
+
+# ─── Publishing moves to a dataset ─────────────────────────────────────
+
+DATASET_DEFAULT = "reachy-mini-moves"
+
+# First-commit datacard for a freshly created dataset. The tags make
+# the dataset findable next to Marionette's move libraries.
+_DATACARD = """\
+---
+tags:
+- reachy-mini
+- reachy-mini-moves
+- robotics
+---
+
+# Reachy Mini moves
+
+Motion clips for [Reachy Mini](https://www.pollen-robotics.com/), baked from
+Blender timelines with the
+[reachy_mini_link](https://github.com/pollen-robotics/reachy_mini_blender)
+add-on.
+
+Each `moves/*.json` is a `RecordedMove`: a dense time/position sampling the
+daemon plays back on its own clock (`play_move.py`, the SDKs, or the add-on's
+Play on Robot button).
+"""
+
+# Rendered by the panel. status is one of:
+# "idle" | "working" | "done" | "error"
+publish = {"status": "idle", "detail": None, "url": None}
+
+
+def slugify(text):
+    """A safe file stem from a move description."""
+    text = unicodedata.normalize("NFKD", text or "")
+    text = text.encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "untitled"
+
+
+def _api(method, url, token, payload=None,
+         content_type="application/json", timeout=20.0):
+    if payload is not None and not isinstance(payload, bytes):
+        payload = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        url, data=payload, method=method,
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": content_type})
+    with urllib.request.urlopen(
+            req, timeout=timeout, context=_ssl_context()) as resp:
+        return json.load(resp)
+
+
+def _dataset_exists(token, repo_id):
+    try:
+        _api("GET", f"{HUB_URL}/api/datasets/{repo_id}", token)
+        return True
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return False
+        raise
+
+
+def _create_dataset(token, name):
+    _api("POST", f"{HUB_URL}/api/repos/create", token,
+         {"type": "dataset", "name": name, "private": False})
+
+
+def _commit_files(token, repo_id, files, message):
+    """One commit with the given [(path_in_repo, bytes)] files.
+
+    Uses the Hub's NDJSON commit endpoint - the same one
+    huggingface_hub drives - so no git and no extra dependency.
+    """
+    lines = [json.dumps({"key": "header", "value": {"summary": message}})]
+    for path, content in files:
+        lines.append(json.dumps({"key": "file", "value": {
+            "path": path,
+            "content": base64.b64encode(content).decode(),
+            "encoding": "base64",
+        }}))
+    _api("POST", f"{HUB_URL}/api/datasets/{repo_id}/commit/main", token,
+         "\n".join(lines).encode(), content_type="application/x-ndjson")
+
+
+def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
+                       on_done=None):
+    """Bundle `move` into <user>/<dataset_name> on the Hub.
+
+    Creates the dataset (with a datacard) on first use. The move lands
+    at moves/<slug-of-description>.json; publishing the same
+    description again overwrites it, which is the predictable thing:
+    the description is the move's identity across the ecosystem.
+    """
+    with _lock:
+        if publish["status"] == "working":
+            return
+        publish.update(status="working", detail=None, url=None)
+
+    def run():
+        try:
+            token, _ = find_token(prefs_token)
+            if token is None:
+                raise ValueError("no Hugging Face token (see sign-in above)")
+            user = whoami(token)
+            repo_id = f"{user}/{dataset_name}"
+            path = f"moves/{slugify(move.get('description'))}.json"
+            files = [(path, json.dumps(move).encode())]
+            if not _dataset_exists(token, repo_id):
+                _create_dataset(token, dataset_name)
+                files.append(("README.md", _DATACARD.encode()))
+            _commit_files(token, repo_id, files,
+                          f"add {path} from Blender")
+            result = dict(status="done", detail=path,
+                          url=f"{HUB_URL}/datasets/{repo_id}")
+        except (ValueError, urllib.error.URLError, OSError) as exc:
+            detail = getattr(exc, "reason", None) or str(exc)
+            result = dict(status="error", detail=str(detail), url=None)
+        with _lock:
+            publish.update(result)
+        if on_done is not None:
+            on_done()
+
+    threading.Thread(target=run, daemon=True, name="reachy-hf-publish").start()

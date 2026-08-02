@@ -193,6 +193,16 @@ and playback survives Blender closing. Works with the Host/Port set in "Robot":
 `127.0.0.1` for a Lite plugged into this machine, the robot's address for a wireless one
 on your network. The same thing from the shell is `play_move.py`.
 
+### Publishing to the Hub
+
+**Publish to Hub** (next to Export Move) bakes the timeline and pushes it to a
+Hugging Face dataset under your namespace — `<you>/reachy-mini-moves` by
+default, created with a datacard on first use. The move lands at
+`moves/<slug-of-description>.json`; publishing the same description again
+overwrites it. Sign-in comes from the hf CLI token, the `HF_TOKEN` env var, or
+a token pasted in the add-on preferences (the panel shows which account it
+found).
+
 ### Exporting a move
 
 Use the panel — the "Timeline" section of the "Reachy Mini" sidebar tab:
