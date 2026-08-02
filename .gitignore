@@ -7,3 +7,7 @@ __pycache__/
 
 # Baked moves are outputs, not sources.
 /moves/
+
+# Generated exports and local working assets
+reachy_mini_viz*.glb
+MiniReachyBis_light.blend
