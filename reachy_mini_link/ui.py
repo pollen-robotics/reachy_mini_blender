@@ -414,6 +414,37 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class REACHY_MINI_OT_reset_rig(bpy.types.Operator):
+    """Return every rig control to its rest pose (clears location,
+rotation and scale on all bones; undoable). If Live Sync is running,
+the robot follows back to neutral"""
+
+    bl_idname = "reachy_mini.reset_rig"
+    bl_label = "Reset Rig"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        mapping = _mapping(context.scene.reachy_mini_link)
+        arm = bpy.data.objects.get(mapping.armature)
+        if arm is None or arm.type != "ARMATURE":
+            self.report({"ERROR"},
+                        f"Reachy Mini: armature {mapping.armature!r} not found")
+            return {"CANCELLED"}
+
+        # Clear every bone, not just the ones rig.read() samples: the
+        # artist-facing sliders drive those bones through constraints,
+        # so a partial reset would be immediately re-overridden.
+        for pb in arm.pose.bones:
+            pb.location = (0.0, 0.0, 0.0)
+            pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            pb.rotation_axis_angle = (0.0, 0.0, 1.0, 0.0)
+            pb.rotation_euler = (0.0, 0.0, 0.0)
+            pb.scale = (1.0, 1.0, 1.0)
+
+        self.report({"INFO"}, "Rig reset to rest pose")
+        return {"FINISHED"}
+
+
 class REACHY_MINI_OT_cancel_test_pose(bpy.types.Operator):
     """Cancel the running test pose sequence and disconnect"""
 
@@ -582,9 +613,11 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
                 icon="TIME")
             row.operator("reachy_mini.cancel_test_pose", text="", icon="X")
         else:
-            row = box.row()
-            row.enabled = not syncing
-            row.operator("reachy_mini.send_test_pose", icon="OUTLINER_OB_ARMATURE")
+            row = box.row(align=True)
+            sub = row.row(align=True)
+            sub.enabled = not syncing
+            sub.operator("reachy_mini.send_test_pose", icon="OUTLINER_OB_ARMATURE")
+            row.operator("reachy_mini.reset_rig", icon="LOOP_BACK")
 
         # ── Timeline: play it on the robot, or export it as a file ─────
         box = layout.box()
@@ -669,6 +702,7 @@ _classes = (
     REACHY_MINI_OT_sync_start,
     REACHY_MINI_OT_sync_stop,
     REACHY_MINI_OT_send_test_pose,
+    REACHY_MINI_OT_reset_rig,
     REACHY_MINI_OT_cancel_test_pose,
     REACHY_MINI_OT_play_on_robot,
     REACHY_MINI_OT_export_move,

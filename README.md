@@ -170,6 +170,10 @@ a known sequence (translations, a head roll, antenna sweeps, body yaw) and confi
 robot moves the way you expect — direction, sign and scale — before pointing Start Live
 Sync at a physical robot.
 
+**Reset Rig** (next to Test Pose) returns every control to its rest pose — the same as
+selecting all bones and clearing their transforms, and undoable with `Ctrl+Z`. If Live
+Sync is running, the robot follows back to neutral.
+
 Note that `Head.001` translation has only a small usable range — about ±0.05 BU in
 Blender, ~23 mm on the robot vertically — before the robot silently saturates: it stops
 following while Blender keeps moving. Large head translations in Blender will not be
