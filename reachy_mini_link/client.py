@@ -123,6 +123,10 @@ class WSClient:
         self._send_lock = threading.Lock()
         self._last_msg = 0.0
         self.last_error = None
+        # Optional hook: called from the drain thread with the raw payload
+        # of every text frame. Lets callers watch for daemon broadcasts
+        # (e.g. play_uploaded_move progress) without subclassing.
+        self.on_message = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -222,6 +226,11 @@ class WSClient:
                     self.last_error = f"connection lost ({exc})"
                 return
             self._last_msg = time.monotonic()
+            if op == OP_TEXT and self.on_message is not None:
+                try:
+                    self.on_message(payload)
+                except Exception:   # a bad hook must not kill the drain
+                    pass
             if op == OP_PING:
                 try:
                     self._raw_send(payload, OP_PONG)

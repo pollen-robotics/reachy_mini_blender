@@ -5,7 +5,6 @@ Layout is the 3D viewport sidebar (N) under a "Reachy Mini" tab.
 
 import math
 import pathlib
-import time
 import webbrowser
 
 import bpy
@@ -100,22 +99,26 @@ def _hf_prefs_token(context):
     return addon.preferences.hf_token if addon else ""
 
 
+def _redraw_later():
+    """Worker-thread callback: schedule a viewport redraw on the main thread.
+
+    Workers must not touch bpy; a one-shot timer gets us back onto the
+    main thread. Shared by every async operation that reports through
+    the panel (HF auth, publish, robot playback, discovery).
+    """
+    def do_redraw():
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+        return None
+
+    bpy.app.timers.register(do_redraw, first_interval=0.0)
+
+
 def _hf_recheck(context):
     """Kick the auth ladder check; redraw the viewport when it lands."""
-
-    def redraw_later():
-        # Worker thread: not allowed to touch bpy. A one-shot timer gets
-        # us back on the main thread for the redraw.
-        def do_redraw():
-            for window in bpy.context.window_manager.windows:
-                for area in window.screen.areas:
-                    if area.type == "VIEW_3D":
-                        area.tag_redraw()
-            return None
-
-        bpy.app.timers.register(do_redraw, first_interval=0.0)
-
-    hub.check_async(prefs_token=_hf_prefs_token(context), on_done=redraw_later)
+    hub.check_async(prefs_token=_hf_prefs_token(context), on_done=_redraw_later)
 
 
 class REACHY_MINI_OT_find_robot(bpy.types.Operator):
@@ -134,13 +137,10 @@ If neither answers, type the IP shown in the mobile app into Host"""
                 if discover.state["status"] == "found":
                     bpy.context.scene.reachy_mini_link.host = \
                         discover.state["host"]
-                for window in bpy.context.window_manager.windows:
-                    for area in window.screen.areas:
-                        if area.type == "VIEW_3D":
-                            area.tag_redraw()
                 return None
 
             bpy.app.timers.register(apply, first_interval=0.0)
+            _redraw_later()
 
         discover.find_async(port=port, on_done=apply_later)
         return {"FINISHED"}
@@ -168,23 +168,12 @@ class REACHY_MINI_OT_publish_move(bpy.types.Operator):
         audio_bytes = _bake_audio(self, context.scene, start, end)
 
         prefs = context.preferences.addons[__package__].preferences
-
-        def redraw_later():
-            def do_redraw():
-                for window in bpy.context.window_manager.windows:
-                    for area in window.screen.areas:
-                        if area.type == "VIEW_3D":
-                            area.tag_redraw()
-                return None
-
-            bpy.app.timers.register(do_redraw, first_interval=0.0)
-
         hub.publish_move_async(
             move,
             dataset_name=prefs.dataset_name or hub.DATASET_DEFAULT,
             prefs_token=prefs.hf_token,
             audio=audio_bytes,
-            on_done=redraw_later,
+            on_done=_redraw_later,
         )
         self.report({"INFO"}, "Publishing to the Hub…")
         return {"FINISHED"}
@@ -513,11 +502,17 @@ class REACHY_MINI_OT_play_on_robot(bpy.types.Operator):
             self.report({"ERROR"},
                         "Reachy Mini: wait for the test pose sequence to end")
             return {"CANCELLED"}
+        if play.state["status"] in ("sending", "playing"):
+            self.report({"INFO"}, "Already playing - stop it first")
+            return {"CANCELLED"}
 
         props = context.scene.reachy_mini_link
         scene = context.scene
         start = None if props.use_scene_range else props.frame_start
         end = None if props.use_scene_range else props.frame_end
+        # Bake and mixdown need bpy, so they stay on the main thread;
+        # everything network moves to play_async's worker so the UI
+        # never freezes on a slow link or a long move.
         try:
             move = bake.bake(
                 scene, mapping=_mapping(props),
@@ -529,31 +524,21 @@ class REACHY_MINI_OT_play_on_robot(bpy.types.Operator):
             return {"CANCELLED"}
         audio_bytes = _bake_audio(self, scene, start, end)
 
-        from . import client
-        conn = client.WSClient()
-        try:
-            conn.connect(props.host, props.port)
-            # The daemon picks its own body yaw unless told otherwise,
-            # which would override the yaw baked into the move.
-            conn.set_automatic_body_yaw(False)
-            conn.set_torque(True)
-            time.sleep(0.3)
-            play.upload_and_play(conn, move, freq=100.0, ease_in=1.0,
-                                 audio=audio_bytes)
-            # Let the upload flush before closing; playback is daemon-side
-            # and survives the disconnect.
-            time.sleep(0.5)
-        except ConnectionError as exc:
-            self.report({"ERROR"}, f"Reachy Mini: {exc}")
-            return {"CANCELLED"}
-        finally:
-            conn.disconnect()
+        play.play_async(props.host, props.port, move, freq=100.0,
+                        ease_in=1.0, audio=audio_bytes,
+                        on_update=_redraw_later)
+        return {"FINISHED"}
 
-        duration = move["time"][-1]
-        with_audio = " with audio" if audio_bytes else ""
-        self.report({"INFO"},
-                    f"Playing {len(move['time'])} frames ({duration:.1f}s)"
-                    f"{with_audio} on {props.host}:{props.port}")
+
+class REACHY_MINI_OT_stop_robot_play(bpy.types.Operator):
+    """Stop the move currently playing on the robot"""
+
+    bl_idname = "reachy_mini.stop_robot_play"
+    bl_label = "Stop"
+
+    def execute(self, context):
+        props = context.scene.reachy_mini_link
+        play.cancel_async(props.host, props.port, on_update=_redraw_later)
         return {"FINISHED"}
 
 
@@ -679,10 +664,23 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             row.prop(props, "frame_start")
             row.prop(props, "frame_end")
 
-        row = box.row()
-        row.scale_y = 1.3
-        row.enabled = not busy
-        row.operator("reachy_mini.play_on_robot", icon="PLAY")
+        pl = play.state
+        if pl["status"] == "playing":
+            row = box.row(align=True)
+            row.scale_y = 1.3
+            row.label(text=f"Playing on robot · {pl['detail']}", icon="PLAY")
+            row.operator("reachy_mini.stop_robot_play", icon="SNAP_FACE")
+        else:
+            row = box.row()
+            row.scale_y = 1.3
+            row.enabled = not busy and pl["status"] != "sending"
+            row.operator("reachy_mini.play_on_robot", icon="PLAY")
+            if pl["status"] == "sending":
+                box.label(text="Sending to the robot…", icon="TIME")
+            elif pl["status"] == "stopped":
+                box.label(text="Stopped", icon="SNAP_FACE")
+            elif pl["status"] == "error":
+                box.label(text=f"Play failed: {pl['detail']}", icon="ERROR")
 
         col = box.column(align=True)
         col.prop(props, "out_path")
@@ -753,6 +751,7 @@ _classes = (
     REACHY_MINI_OT_reset_rig,
     REACHY_MINI_OT_cancel_test_pose,
     REACHY_MINI_OT_play_on_robot,
+    REACHY_MINI_OT_stop_robot_play,
     REACHY_MINI_OT_export_move,
     REACHY_MINI_PT_link,
 )
