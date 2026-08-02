@@ -4,12 +4,13 @@ Layout is the 3D viewport sidebar (N) under a "Reachy Mini" tab.
 """
 
 import math
+import pathlib
 import time
 import webbrowser
 
 import bpy
 
-from . import bake, discover, hub, play, rig, sync
+from . import audio, bake, discover, hub, play, rig, sync
 
 
 # Module-level state for test_pose timer-driven sequence.
@@ -126,6 +127,7 @@ class REACHY_MINI_OT_publish_move(bpy.types.Operator):
         except (rig.RigError, ValueError) as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
+        audio_bytes = _bake_audio(self, context.scene, start, end)
 
         prefs = context.preferences.addons[__package__].preferences
 
@@ -143,6 +145,7 @@ class REACHY_MINI_OT_publish_move(bpy.types.Operator):
             move,
             dataset_name=prefs.dataset_name or hub.DATASET_DEFAULT,
             prefs_token=prefs.hf_token,
+            audio=audio_bytes,
             on_done=redraw_later,
         )
         self.report({"INFO"}, "Publishing to the Hub…")
@@ -221,6 +224,25 @@ class ReachyMiniLinkProps(bpy.types.PropertyGroup):
 
 def _mapping(props):
     return rig.Mapping(head_scale=props.head_scale)
+
+
+def _bake_audio(operator, scene, start, end):
+    """OGG bytes for the scene's sequencer audio, or None.
+
+    Sound is opt-out by muting the strip, not by a setting: a sound
+    strip in the sequencer means the artist animated against it. A
+    failed mixdown degrades to motion-only with a warning rather than
+    blocking the move.
+    """
+    if not audio.scene_has_audio(scene):
+        return None
+    try:
+        return audio.mixdown_ogg(scene, frame_start=start, frame_end=end)
+    except RuntimeError as exc:
+        operator.report({"WARNING"},
+                        f"Reachy Mini: audio mixdown failed ({exc}); "
+                        "continuing without sound")
+        return None
 
 
 def _settings(props):
@@ -436,6 +458,7 @@ class REACHY_MINI_OT_play_on_robot(bpy.types.Operator):
         except (rig.RigError, ValueError) as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
+        audio_bytes = _bake_audio(self, scene, start, end)
 
         from . import client
         conn = client.WSClient()
@@ -446,7 +469,8 @@ class REACHY_MINI_OT_play_on_robot(bpy.types.Operator):
             conn.set_automatic_body_yaw(False)
             conn.set_torque(True)
             time.sleep(0.3)
-            play.upload_and_play(conn, move, freq=100.0, ease_in=1.0)
+            play.upload_and_play(conn, move, freq=100.0, ease_in=1.0,
+                                 audio=audio_bytes)
             # Let the upload flush before closing; playback is daemon-side
             # and survives the disconnect.
             time.sleep(0.5)
@@ -457,9 +481,10 @@ class REACHY_MINI_OT_play_on_robot(bpy.types.Operator):
             conn.disconnect()
 
         duration = move["time"][-1]
+        with_audio = " with audio" if audio_bytes else ""
         self.report({"INFO"},
-                    f"Playing {len(move['time'])} frames ({duration:.1f}s) "
-                    f"on {props.host}:{props.port}")
+                    f"Playing {len(move['time'])} frames ({duration:.1f}s)"
+                    f"{with_audio} on {props.host}:{props.port}")
         return {"FINISHED"}
 
 
@@ -484,10 +509,23 @@ class REACHY_MINI_OT_export_move(bpy.types.Operator):
         except (rig.RigError, OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
+        # Audio goes next to the JSON as a .ogg sidecar, the same layout
+        # the daemon's move folders and Marionette datasets use.
+        audio_bytes = _bake_audio(self, scene, start, end)
+        if audio_bytes:
+            sidecar = str(pathlib.Path(resolved_path).with_suffix(".ogg"))
+            try:
+                with open(sidecar, "wb") as fh:
+                    fh.write(audio_bytes)
+            except OSError as exc:
+                self.report({"ERROR"}, f"Reachy Mini: {exc}")
+                return {"CANCELLED"}
         # Report the resolved absolute path, not props.out_path's unresolved
         # "//" form, so the artist is shown a path that actually exists.
+        with_audio = " (+ audio sidecar)" if audio_bytes else ""
         self.report({"INFO"},
-                    f"Wrote {len(move['time'])} frames to {resolved_path}")
+                    f"Wrote {len(move['time'])} frames to "
+                    f"{resolved_path}{with_audio}")
         return {"FINISHED"}
 
 
@@ -552,6 +590,9 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         box = layout.box()
         box.label(text="Timeline", icon="SEQUENCE")
         box.prop(props, "description")
+        if audio.scene_has_audio(context.scene):
+            box.label(text="Sequencer audio will play with the move",
+                      icon="SOUND")
         box.prop(props, "use_scene_range")
         if not props.use_scene_range:
             row = box.row(align=True)

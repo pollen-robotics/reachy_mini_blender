@@ -193,15 +193,37 @@ and playback survives Blender closing. Works with the Host/Port set in "Robot":
 `127.0.0.1` for a Lite plugged into this machine, the robot's address for a wireless one
 on your network. The same thing from the shell is `play_move.py`.
 
+### Sound
+
+Drop a sound strip into Blender's Video Sequencer and animate against it. When
+one exists (and isn't muted), the panel says so, and every path carries the
+audio along automatically:
+
+- **Play on Robot** uploads it with the move; the daemon starts its own
+  playback (GStreamer, on the robot's speaker) in lockstep with the motion.
+- **Publish to Hub** pushes it as a `data/<slug>.ogg` sidecar next to the
+  move JSON — the same convention Marionette and the daemon's move folders
+  use.
+- **Export Move** writes a `.ogg` next to the output JSON, which
+  `play_move.py` picks up automatically.
+
+The mixdown is rendered by Blender itself over the exported frame range, so
+whatever you hear when scrubbing is what the robot plays. Mute the strip to
+export motion-only.
+
 ### Publishing to the Hub
 
 **Publish to Hub** (next to Export Move) bakes the timeline and pushes it to a
 Hugging Face dataset under your namespace — `<you>/reachy-mini-moves` by
-default, created with a datacard on first use. The move lands at
-`moves/<slug-of-description>.json`; publishing the same description again
-overwrites it. Sign-in comes from the hf CLI token, the `HF_TOKEN` env var, or
-a token pasted in the add-on preferences (the panel shows which account it
-found).
+default, created with a datacard on first use. The layout and tag are
+Marionette's community-dataset conventions, so published moves show up in its
+community browser and import cleanly: the move lands at
+`data/<slug-of-description>.json` (canonicalized to ≤50 Hz / 6 decimals),
+audio beside it as `data/<slug>.ogg`, and the datacard carries the
+`reachy_mini_community_moves` tag. Publishing the same description again
+overwrites both files. Sign-in comes from the hf CLI token, the `HF_TOKEN`
+env var, or a token pasted in the add-on preferences (the panel shows which
+account it found).
 
 ### Exporting a move
 
@@ -264,6 +286,8 @@ playing moves/wave.json: 49 frames, 2.00s (+1.0s ease-in)
 | `--ease-in SECS` | interpolate to the move's first frame before playing (default `1.0`; `0` starts abruptly from wherever the head is) |
 | `--freq HZ` | daemon playback tick rate (default `100`) |
 | `--no-wait` | return as soon as playback is requested |
+| `--audio PATH` | audio file to play with the move (default: the `.ogg` sidecar next to the JSON, when present) |
+| `--no-audio` | skip the sidecar even if one exists |
 
 It uploads the move to the daemon and asks the daemon to play it, so the daemon owns the
 playback loop — interpolation, the tick, the Stewart IK. Nothing streams frames at it,

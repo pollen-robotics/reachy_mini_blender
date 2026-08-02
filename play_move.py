@@ -27,6 +27,9 @@ Flags:
                   robot happens to be)
   --freq HZ       daemon playback tick rate (default 100)
   --no-wait       return as soon as playback is requested
+  --audio PATH    audio file to play with the move; when omitted, a .ogg
+                  sidecar next to the move JSON is picked up automatically
+  --no-audio      skip the sidecar even if one exists
 """
 
 import argparse
@@ -49,6 +52,8 @@ def main():
     ap.add_argument("--ease-in", type=float, default=1.0)
     ap.add_argument("--freq", type=float, default=100.0)
     ap.add_argument("--no-wait", action="store_true")
+    ap.add_argument("--audio", default=None)
+    ap.add_argument("--no-audio", action="store_true")
     a = ap.parse_args()
 
     try:
@@ -65,6 +70,19 @@ def main():
         sys.exit(f"ERROR: {a.move_file} has {len(move['time'])} frame(s); "
                  "a playable move needs at least 2")
     duration = float(move["time"][-1])
+
+    audio_bytes = None
+    audio_path = a.audio
+    if audio_path is None and not a.no_audio:
+        sidecar = os.path.splitext(a.move_file)[0] + ".ogg"
+        if os.path.exists(sidecar):
+            audio_path = sidecar
+    if audio_path and not a.no_audio:
+        try:
+            with open(audio_path, "rb") as fh:
+                audio_bytes = fh.read()
+        except OSError as exc:
+            sys.exit(f"ERROR: cannot read {audio_path}: {exc.strerror}")
 
     # Collect the daemon's playback events so we can report the real outcome
     # rather than assuming the upload worked.
@@ -106,9 +124,12 @@ def main():
         conn.set_torque(True)
         time.sleep(0.3)
 
-        watched["id"] = upload_and_play(conn, move, a.freq, a.ease_in)
+        watched["id"] = upload_and_play(conn, move, a.freq, a.ease_in,
+                                        audio=audio_bytes)
+        with_audio = f" + audio ({audio_path})" if audio_bytes else ""
         print(f"playing {a.move_file}: {len(move['time'])} frames, "
-              f"{duration:.2f}s{'' if not a.ease_in else f' (+{a.ease_in:.1f}s ease-in)'}")
+              f"{duration:.2f}s{'' if not a.ease_in else f' (+{a.ease_in:.1f}s ease-in)'}"
+              f"{with_audio}")
 
         if a.no_wait:
             time.sleep(0.5)   # let the upload flush before we close the socket

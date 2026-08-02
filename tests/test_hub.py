@@ -55,5 +55,43 @@ class FindTokenTest(unittest.TestCase):
         self.assertEqual(token, "hf_prefs")
 
 
+class CanonicalizeTest(unittest.TestCase):
+    """Mirrors Marionette's canonicalizeMotion so datasets round-trip."""
+
+    @staticmethod
+    def _move(times):
+        return {"description": "t",
+                "time": list(times),
+                "set_target_data": [
+                    {"body_yaw": 0.123456789} for _ in times]}
+
+    def test_sub_rate_bake_is_kept_whole(self):
+        # A 24 fps bake is below 50 Hz: every frame survives.
+        times = [i / 24 for i in range(48)]
+        out = hub.canonicalize(self._move(times))
+        self.assertEqual(len(out["time"]), 48)
+
+    def test_100hz_decimates_to_50(self):
+        times = [i / 100 for i in range(200)]
+        out = hub.canonicalize(self._move(times))
+        self.assertAlmostEqual(len(out["time"]), 101, delta=2)
+        # The last frame always survives so the duration is intact.
+        self.assertEqual(out["time"][-1], round(times[-1], 6))
+
+    def test_floats_rounded_to_6dp(self):
+        out = hub.canonicalize(self._move([0.0, 0.1234567, 1.0]))
+        self.assertEqual(out["time"][1], 0.123457)
+        self.assertEqual(out["set_target_data"][0]["body_yaw"], 0.123457)
+
+    def test_idempotent(self):
+        once = hub.canonicalize(self._move([i / 100 for i in range(200)]))
+        self.assertEqual(hub.canonicalize(once), once)
+
+    def test_original_untouched(self):
+        move = self._move([0.0, 0.1234567])
+        hub.canonicalize(move)
+        self.assertEqual(move["time"][1], 0.1234567)
+
+
 if __name__ == "__main__":
     unittest.main()

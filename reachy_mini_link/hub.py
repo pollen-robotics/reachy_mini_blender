@@ -132,13 +132,14 @@ def check_async(prefs_token="", on_done=None):
 
 DATASET_DEFAULT = "reachy-mini-moves"
 
-# First-commit datacard for a freshly created dataset. The tags make
-# the dataset findable next to Marionette's move libraries.
+# First-commit datacard. The reachy_mini_community_moves tag is what
+# Marionette's community browser filters on; the data/ layout below is
+# its dataset schema, so published moves are importable there as-is.
 _DATACARD = """\
 ---
 tags:
+- reachy_mini_community_moves
 - reachy-mini
-- reachy-mini-moves
 - robotics
 ---
 
@@ -147,11 +148,12 @@ tags:
 Motion clips for [Reachy Mini](https://www.pollen-robotics.com/), baked from
 Blender timelines with the
 [reachy_mini_link](https://github.com/pollen-robotics/reachy_mini_blender)
-add-on.
+add-on. Marionette-compatible layout:
 
-Each `moves/*.json` is a `RecordedMove`: a dense time/position sampling the
-daemon plays back on its own clock (`play_move.py`, the SDKs, or the add-on's
-Play on Robot button).
+- `data/<move>.json` - the motion (`RecordedMove`: description, time,
+  set_target_data), canonicalized to <=50 Hz / 6 decimals.
+- `data/<move>.ogg` - optional audio sidecar, played by the daemon in
+  lockstep with the motion.
 """
 
 # Rendered by the panel. status is one of:
@@ -165,6 +167,46 @@ def slugify(text):
     text = text.encode("ascii", "ignore").decode()
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug or "untitled"
+
+
+def canonicalize(move, hz=50.0, decimals=6):
+    """Marionette's canonical compressed motion: <=hz + rounded floats.
+
+    Same algorithm as its canonicalizeMotion (walk a fixed 1/hz grid,
+    keep the first frame at/after each tick, always keep the last
+    frame), so a round-trip through the community datasets is
+    byte-stable. Idempotent; a bake below the target rate only gets
+    the rounding.
+    """
+    time = move.get("time") or []
+    frames = move.get("set_target_data") or []
+    if len(time) >= 3:
+        step = 1.0 / hz
+        keep = [0]
+        next_tick = time[0] + step
+        for i in range(1, len(time)):
+            if time[i] >= next_tick - 1e-9:
+                keep.append(i)
+                next_tick += step
+        if keep[-1] != len(time) - 1:
+            keep.append(len(time) - 1)
+        if len(keep) < len(time):
+            time = [time[i] for i in keep]
+            frames = [frames[i] for i in keep]
+
+    def rnd(x):
+        if isinstance(x, float):
+            return round(x, decimals)
+        if isinstance(x, list):
+            return [rnd(v) for v in x]
+        if isinstance(x, dict):
+            return {k: rnd(v) for k, v in x.items()}
+        return x
+
+    out = dict(move)
+    out["time"] = rnd(time)
+    out["set_target_data"] = rnd(frames)
+    return out
 
 
 def _api(method, url, token, payload=None,
@@ -213,13 +255,15 @@ def _commit_files(token, repo_id, files, message):
 
 
 def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
-                       on_done=None):
-    """Bundle `move` into <user>/<dataset_name> on the Hub.
+                       audio=None, on_done=None):
+    """Bundle `move` (and optional OGG `audio` bytes) into
+    <user>/<dataset_name> on the Hub, in Marionette's community layout.
 
     Creates the dataset (with a datacard) on first use. The move lands
-    at moves/<slug-of-description>.json; publishing the same
-    description again overwrites it, which is the predictable thing:
-    the description is the move's identity across the ecosystem.
+    at data/<slug-of-description>.json, the audio next to it as
+    data/<slug>.ogg; publishing the same description again overwrites
+    both, which is the predictable thing: the description is the
+    move's identity across the ecosystem.
     """
     with _lock:
         if publish["status"] == "working":
@@ -233,8 +277,11 @@ def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
                 raise ValueError("no Hugging Face token (see sign-in above)")
             user = whoami(token)
             repo_id = f"{user}/{dataset_name}"
-            path = f"moves/{slugify(move.get('description'))}.json"
-            files = [(path, json.dumps(move).encode())]
+            stem = f"data/{slugify(move.get('description'))}"
+            path = f"{stem}.json"
+            files = [(path, json.dumps(canonicalize(move)).encode())]
+            if audio:
+                files.append((f"{stem}.ogg", audio))
             if not _dataset_exists(token, repo_id):
                 _create_dataset(token, dataset_name)
                 files.append(("README.md", _DATACARD.encode()))
