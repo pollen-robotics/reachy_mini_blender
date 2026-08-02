@@ -148,7 +148,8 @@ See [Installing](#installing) above for setup.
 
 1. Start a daemon. For the simulator: `reachy-mini-daemon --sim`.
 2. In the 3D viewport, open the sidebar (`N`) and select the "Reachy Mini" tab.
-3. Set Host/Port (defaults to `localhost:8000`) and click **Start Sync**.
+3. Set Host/Port in the "Robot" section (defaults to `127.0.0.1:8000`; use the
+   robot's IP or `reachy-mini.local` for a wireless one) and click **Start Live Sync**.
 
 While syncing, drive the robot by posing the animator's control surface — everything
 else in the rig is mechanism that follows:
@@ -162,10 +163,10 @@ else in the rig is mechanism that follows:
 
 See `docs/RIG_MAPPING.md` for the full mapping, units and provenance of every constant.
 
-**Verify in the simulator before touching real hardware.** Use **Send test pose** to run
+**Verify in the simulator before touching real hardware.** Use **Test Pose** to run
 a known sequence (translations, a head roll, antenna sweeps, body yaw) and confirm the
-robot moves the way you expect — direction, sign and scale — before pointing Start Sync
-at a physical robot.
+robot moves the way you expect — direction, sign and scale — before pointing Start Live
+Sync at a physical robot.
 
 Note that `Head.001` translation has only a small usable range — about ±0.05 BU in
 Blender, ~23 mm on the robot vertically — before the robot silently saturates: it stops
@@ -176,15 +177,23 @@ reproduced on the robot; see `docs/RIG_MAPPING.md` for the confirmed numbers.
 simultaneously — a forgotten Blender session with Start Sync still on, or a desktop app —
 the daemon applies whichever target arrived last, so the two fight and the robot appears
 to track sluggishly or drift back toward a neutral pose. That looks exactly like a
-saturation or calibration problem but isn't one. Press **Stop Sync** when you're done, and
+saturation or calibration problem but isn't one. Press **Stop Live Sync** when you're done, and
 if the robot ever behaves like this, check for a stale connection with
 `ss -tnp | grep :8000`. Separately, the daemon ignores a `goto_target` that arrives while
 another move is still playing, which is why the add-on spaces its test-pose steps by the
 move duration plus a margin — worth knowing if you're scripting the daemon directly.
 
+### Playing the timeline on the robot
+
+**Play on Robot** (in the "Timeline" section) bakes the timeline and uploads it to the
+daemon, which plays it back on its own 100 Hz clock — frame-accurate, no network jitter,
+and playback survives Blender closing. Works with the Host/Port set in "Robot":
+`127.0.0.1` for a Lite plugged into this machine, the robot's address for a wireless one
+on your network. The same thing from the shell is `play_move.py`.
+
 ### Exporting a move
 
-Use the panel — the "Export Move" section of the "Reachy Mini" sidebar tab:
+Use the panel — the "Timeline" section of the "Reachy Mini" sidebar tab:
 
 | Field | Meaning |
 |---|---|

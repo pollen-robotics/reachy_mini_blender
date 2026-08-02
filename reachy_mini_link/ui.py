@@ -9,7 +9,7 @@ import webbrowser
 
 import bpy
 
-from . import bake, bridge, hub, play, rig, sync
+from . import bake, hub, play, rig, sync
 
 
 # Module-level state for test_pose timer-driven sequence.
@@ -104,18 +104,15 @@ class ReachyMiniLinkProps(bpy.types.PropertyGroup):
     # handshake, and the connection times out instead of falling back.
     host: bpy.props.StringProperty(
         name="Host", default="127.0.0.1",
-        description="Daemon host. Use the robot's address for a remote robot")
+        description=("Robot address: 127.0.0.1 for a Lite plugged into this "
+                     "machine, or the robot's IP / reachy-mini.local for a "
+                     "wireless one on your network"))
     port: bpy.props.IntProperty(
         name="Port", default=8000, min=1, max=65535,
-        description="Daemon SDK WebSocket port")
+        description="Daemon port (8000 unless you changed it)")
     rate_hz: bpy.props.FloatProperty(
         name="Rate", default=50.0, min=1.0, max=120.0,
         description="Streaming rate in Hz. Takes effect on the next Start")
-
-    bridge_port: bpy.props.IntProperty(
-        name="Bridge port", default=9877, min=1024, max=65535,
-        description=("Local port The Animator web app connects to. "
-                     "Loopback only; nothing leaves this machine"))
 
     description: bpy.props.StringProperty(
         name="Description", default="untitled",
@@ -197,7 +194,7 @@ class REACHY_MINI_OT_sync_start(bpy.types.Operator):
     """Connect to the daemon and start mirroring the rig"""
 
     bl_idname = "reachy_mini.sync_start"
-    bl_label = "Start Sync"
+    bl_label = "Start Live Sync"
 
     def execute(self, context):
         if _test_pose_in_flight():
@@ -220,7 +217,7 @@ class REACHY_MINI_OT_sync_stop(bpy.types.Operator):
     """Stop mirroring and disconnect. The robot holds its last pose"""
 
     bl_idname = "reachy_mini.sync_stop"
-    bl_label = "Stop Sync"
+    bl_label = "Stop Live Sync"
 
     def execute(self, context):
         sync.stop()
@@ -231,7 +228,7 @@ class REACHY_MINI_OT_send_test_pose(bpy.types.Operator):
     """Send a known sequence to confirm axis signs and head scale in sim"""
 
     bl_idname = "reachy_mini.send_test_pose"
-    bl_label = "Send test pose"
+    bl_label = "Test Pose"
 
     def execute(self, context):
         global _test_state
@@ -317,43 +314,6 @@ class REACHY_MINI_OT_cancel_test_pose(bpy.types.Operator):
     def execute(self, context):
         _stop_test_pose()
         self.report({"INFO"}, "Test sequence cancelled")
-        return {"FINISHED"}
-
-
-class REACHY_MINI_OT_bridge_start(bpy.types.Operator):
-    """Expose the rig to The Animator web app (ws://127.0.0.1, local only)"""
-
-    bl_idname = "reachy_mini.bridge_start"
-    bl_label = "Start Bridge"
-
-    def execute(self, context):
-        props = context.scene.reachy_mini_link
-        settings = sync.Settings(
-            host="127.0.0.1",
-            port=props.bridge_port,
-            rate_hz=props.rate_hz,
-            mapping=_mapping(props),
-        )
-        try:
-            bridge.start(settings)
-        except OSError as exc:
-            self.report({"ERROR"},
-                        f"Reachy Mini: port {props.bridge_port} unavailable "
-                        f"({exc}). Another Blender running?")
-            return {"CANCELLED"}
-        self.report({"INFO"},
-                    f"Bridge listening on ws://127.0.0.1:{props.bridge_port}")
-        return {"FINISHED"}
-
-
-class REACHY_MINI_OT_bridge_stop(bpy.types.Operator):
-    """Stop the local bridge and disconnect the web app"""
-
-    bl_idname = "reachy_mini.bridge_stop"
-    bl_label = "Stop Bridge"
-
-    def execute(self, context):
-        bridge.stop()
         return {"FINISHED"}
 
 
@@ -455,103 +415,95 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         layout = self.layout
         props = context.scene.reachy_mini_link
         phase, message = sync.get_status()
+        syncing = sync.is_running()
+        test_running = _test_pose_in_flight()
+        busy = syncing or test_running
 
+        # ── Robot: where it is, and the live link to it ────────────────
         box = layout.box()
-        box.label(text="Connection")
+        box.label(text="Robot", icon="TOOL_SETTINGS")
         col = box.column(align=True)
-        col.enabled = not sync.is_running()
+        col.enabled = not busy
         col.prop(props, "host")
         col.prop(props, "port")
-        col.prop(props, "rate_hz")
 
-        if sync.is_running():
-            box.operator("reachy_mini.sync_stop", text="Stop Sync", icon="PAUSE")
+        row = box.row()
+        row.scale_y = 1.3
+        if syncing:
+            row.operator("reachy_mini.sync_stop", icon="PAUSE")
         else:
-            box.operator("reachy_mini.sync_start", text="Start Sync", icon="PLAY")
+            row.enabled = not test_running
+            row.operator("reachy_mini.sync_start", icon="PLAY")
 
         if phase == "syncing":
-            box.label(text=f"Syncing ({message})", icon="REC")
+            box.label(text=f"Live · {message}", icon="REC")
         elif phase == "error":
             box.label(text=message or "error", icon="ERROR")
-        else:
-            box.label(text="Idle", icon="RADIOBUT_OFF")
-
-        test_running = _test_pose_in_flight()
-        row = box.row()
-        row.enabled = not sync.is_running() and not test_running
-        row.operator("reachy_mini.send_test_pose", icon="EXPORT")
 
         if test_running:
             st = _test_state
-            box.label(
-                text=f"Test pose {st['index']}/{len(st['steps'])}: {st['label']}",
+            row = box.row(align=True)
+            row.label(
+                text=f"Test {st['index']}/{len(st['steps'])}: {st['label']}",
                 icon="TIME")
-            box.operator("reachy_mini.cancel_test_pose", text="Cancel",
-                         icon="X")
-
-        box = layout.box()
-        box.label(text="Local Bridge (The Animator)")
-        bphase, bmessage = bridge.get_status()
-        row = box.row()
-        row.enabled = not bridge.is_running()
-        row.prop(props, "bridge_port")
-        if bridge.is_running():
-            box.operator("reachy_mini.bridge_stop", text="Stop Bridge",
-                         icon="PAUSE")
+            row.operator("reachy_mini.cancel_test_pose", text="", icon="X")
         else:
-            box.operator("reachy_mini.bridge_start", text="Start Bridge",
-                         icon="WORLD")
-        if bphase == "connected":
-            box.label(text=f"App connected ({bmessage})", icon="REC")
-        elif bphase == "listening":
-            box.label(text=f"Waiting for the app ({bmessage})",
-                      icon="RADIOBUT_ON")
-        elif bphase == "error":
-            box.label(text=bmessage or "error", icon="ERROR")
-        else:
-            box.label(text="Off", icon="RADIOBUT_OFF")
+            row = box.row()
+            row.enabled = not syncing
+            row.operator("reachy_mini.send_test_pose", icon="OUTLINER_OB_ARMATURE")
 
+        # ── Timeline: play it on the robot, or export it as a file ─────
         box = layout.box()
-        box.label(text="Export Move")
+        box.label(text="Timeline", icon="SEQUENCE")
         box.prop(props, "description")
-        box.prop(props, "out_path")
-        if not bpy.data.filepath and props.out_path.startswith("//"):
-            box.label(text="Save the .blend first, or use an absolute path",
-                     icon="ERROR")
         box.prop(props, "use_scene_range")
         if not props.use_scene_range:
             row = box.row(align=True)
             row.prop(props, "frame_start")
             row.prop(props, "frame_end")
-        row = box.row(align=True)
-        row.operator("reachy_mini.export_move", icon="FILE_TICK")
+
+        row = box.row()
+        row.scale_y = 1.3
+        row.enabled = not busy
         row.operator("reachy_mini.play_on_robot", icon="PLAY")
 
+        col = box.column(align=True)
+        col.prop(props, "out_path")
+        if not bpy.data.filepath and props.out_path.startswith("//"):
+            col.label(text="Save the .blend first, or use an absolute path",
+                      icon="ERROR")
+        col.operator("reachy_mini.export_move", icon="FILE_TICK")
+
+        # ── Hugging Face: sign-in state (publishing lands here) ────────
         box = layout.box()
-        box.label(text="Hugging Face")
         st = hub.state
         if st["status"] == "ok":
-            box.label(text=f"Signed in as {st['user']} ({st['source']})",
-                      icon="CHECKMARK")
+            box.label(text=f"Signed in as {st['user']}", icon="CHECKMARK")
         elif st["status"] == "checking":
-            box.label(text="Checking…", icon="TIME")
+            box.label(text="Hugging Face: checking…", icon="TIME")
         elif st["status"] == "error":
-            box.label(text=st["error"] or "error", icon="ERROR")
-            box.operator("reachy_mini.hf_check", text="Retry", icon="FILE_REFRESH")
+            box.label(text=f"Hugging Face: {st['error'] or 'error'}",
+                      icon="ERROR")
+            box.operator("reachy_mini.hf_check", text="Retry",
+                         icon="FILE_REFRESH")
         elif st["status"] == "no_token":
-            box.label(text="No token found", icon="RADIOBUT_OFF")
-            box.label(text="Sign in with the hf CLI, or paste a token in "
-                           "the add-on preferences")
+            box.label(text="Hugging Face: not signed in", icon="RADIOBUT_OFF")
             row = box.row(align=True)
             row.operator("reachy_mini.hf_token_page", icon="URL")
             row.operator("reachy_mini.hf_check", text="Check Again",
                          icon="FILE_REFRESH")
         else:  # unchecked
-            box.operator("reachy_mini.hf_check", icon="FILE_REFRESH")
+            box.operator("reachy_mini.hf_check",
+                         text="Check Hugging Face Sign-in",
+                         icon="FILE_REFRESH")
 
-        box = layout.box()
-        box.label(text="Advanced")
-        box.prop(props, "head_scale")
+        # ── Advanced: rarely touched knobs ──────────────────────────────
+        header, panel = layout.panel("reachy_mini_advanced",
+                                     default_closed=True)
+        header.label(text="Advanced")
+        if panel:
+            panel.prop(props, "rate_hz")
+            panel.prop(props, "head_scale")
 
 
 _classes = (
@@ -563,8 +515,6 @@ _classes = (
     REACHY_MINI_OT_sync_stop,
     REACHY_MINI_OT_send_test_pose,
     REACHY_MINI_OT_cancel_test_pose,
-    REACHY_MINI_OT_bridge_start,
-    REACHY_MINI_OT_bridge_stop,
     REACHY_MINI_OT_play_on_robot,
     REACHY_MINI_OT_export_move,
     REACHY_MINI_PT_link,
@@ -591,10 +541,9 @@ def unregister():
     # Clean up the test sequence timer and connection before tearing down.
     _stop_test_pose()
 
-    # Stop the sync loop and the local bridge before tearing down the
-    # classes they report status through.
+    # Stop the sync loop before tearing down the classes it reports
+    # status through.
     sync.stop()
-    bridge.stop()
     if hasattr(bpy.types.Scene, "reachy_mini_link"):
         del bpy.types.Scene.reachy_mini_link
     for cls in reversed(_classes):
