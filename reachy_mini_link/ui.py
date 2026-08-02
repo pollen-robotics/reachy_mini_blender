@@ -5,10 +5,11 @@ Layout is the 3D viewport sidebar (N) under a "Reachy Mini" tab.
 
 import math
 import time
+import webbrowser
 
 import bpy
 
-from . import bake, bridge, play, rig, sync
+from . import bake, bridge, hub, play, rig, sync
 
 
 # Module-level state for test_pose timer-driven sequence.
@@ -25,6 +26,74 @@ def _test_pose_in_flight():
     each path would silently eat the other.
     """
     return _test_state["client"] is not None
+
+
+class ReachyMiniLinkPrefs(bpy.types.AddonPreferences):
+    """Add-on preferences: only the HF token fallback lives here.
+
+    The token is per-user, not per-scene, so it belongs in preferences
+    rather than in the scene PropertyGroup (which is saved in .blends
+    that people share).
+    """
+
+    bl_idname = __package__
+
+    hf_token: bpy.props.StringProperty(
+        name="HF Token", subtype="PASSWORD",
+        description=("Hugging Face access token (write scope). Only needed "
+                     "if you are not signed in with the hf CLI and have no "
+                     "HF_TOKEN environment variable"))
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.prop(self, "hf_token")
+        layout.label(text="Checked only if no hf CLI login or HF_TOKEN "
+                          "env var is found.")
+
+
+def _hf_prefs_token(context):
+    addon = context.preferences.addons.get(__package__)
+    return addon.preferences.hf_token if addon else ""
+
+
+def _hf_recheck(context):
+    """Kick the auth ladder check; redraw the viewport when it lands."""
+
+    def redraw_later():
+        # Worker thread: not allowed to touch bpy. A one-shot timer gets
+        # us back on the main thread for the redraw.
+        def do_redraw():
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type == "VIEW_3D":
+                        area.tag_redraw()
+            return None
+
+        bpy.app.timers.register(do_redraw, first_interval=0.0)
+
+    hub.check_async(prefs_token=_hf_prefs_token(context), on_done=redraw_later)
+
+
+class REACHY_MINI_OT_hf_check(bpy.types.Operator):
+    """Look for a Hugging Face token and verify it against the Hub"""
+
+    bl_idname = "reachy_mini.hf_check"
+    bl_label = "Check Sign-in"
+
+    def execute(self, context):
+        _hf_recheck(context)
+        return {"FINISHED"}
+
+
+class REACHY_MINI_OT_hf_token_page(bpy.types.Operator):
+    """Open the Hugging Face token settings page in your browser"""
+
+    bl_idname = "reachy_mini.hf_token_page"
+    bl_label = "Get a Token"
+
+    def execute(self, _context):
+        webbrowser.open(hub.TOKEN_PAGE_URL)
+        return {"FINISHED"}
 
 
 class ReachyMiniLinkProps(bpy.types.PropertyGroup):
@@ -459,11 +528,36 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         row.operator("reachy_mini.play_on_robot", icon="PLAY")
 
         box = layout.box()
+        box.label(text="Hugging Face")
+        st = hub.state
+        if st["status"] == "ok":
+            box.label(text=f"Signed in as {st['user']} ({st['source']})",
+                      icon="CHECKMARK")
+        elif st["status"] == "checking":
+            box.label(text="Checking…", icon="TIME")
+        elif st["status"] == "error":
+            box.label(text=st["error"] or "error", icon="ERROR")
+            box.operator("reachy_mini.hf_check", text="Retry", icon="FILE_REFRESH")
+        elif st["status"] == "no_token":
+            box.label(text="No token found", icon="RADIOBUT_OFF")
+            box.label(text="Sign in with the hf CLI, or paste a token in "
+                           "the add-on preferences")
+            row = box.row(align=True)
+            row.operator("reachy_mini.hf_token_page", icon="URL")
+            row.operator("reachy_mini.hf_check", text="Check Again",
+                         icon="FILE_REFRESH")
+        else:  # unchecked
+            box.operator("reachy_mini.hf_check", icon="FILE_REFRESH")
+
+        box = layout.box()
         box.label(text="Advanced")
         box.prop(props, "head_scale")
 
 
 _classes = (
+    ReachyMiniLinkPrefs,
+    REACHY_MINI_OT_hf_check,
+    REACHY_MINI_OT_hf_token_page,
     ReachyMiniLinkProps,
     REACHY_MINI_OT_sync_start,
     REACHY_MINI_OT_sync_stop,
@@ -482,6 +576,15 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.Scene.reachy_mini_link = bpy.props.PointerProperty(
         type=ReachyMiniLinkProps)
+
+    # Resolve HF sign-in once at startup so the panel is populated
+    # without a click. Deferred to a timer: register() runs in a
+    # restricted context where preferences may not be readable yet.
+    def initial_hf_check():
+        _hf_recheck(bpy.context)
+        return None
+
+    bpy.app.timers.register(initial_hf_check, first_interval=0.5)
 
 
 def unregister():
