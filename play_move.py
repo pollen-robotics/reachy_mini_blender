@@ -34,46 +34,11 @@ import json
 import os
 import sys
 import time
-import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from reachy_mini_link import client  # noqa: E402  (must follow the sys.path edit)
-
-# The protocol caps a chunk at 16 KiB; stay under it with room for the JSON
-# envelope the chunk is wrapped in.
-CHUNK = 12 * 1024
-
-
-def upload_and_play(conn, move, freq, ease_in):
-    """Upload `move` to the daemon and start playback. Returns the upload id."""
-    payload = json.dumps(move)
-    chunks = [payload[i:i + CHUNK] for i in range(0, len(payload), CHUNK)]
-    upload_id = str(uuid.uuid4())
-
-    conn._send_json({
-        "type": "upload_move_start",
-        "upload_id": upload_id,
-        "total_chunks": len(chunks),
-        "description": move.get("description", ""),
-        "estimated_duration_s": float(move["time"][-1]),
-    })
-    # Chunks must arrive in order; the daemon drops the whole slot otherwise.
-    for i, c in enumerate(chunks):
-        conn._send_json({
-            "type": "upload_move_chunk",
-            "upload_id": upload_id,
-            "chunk_index": i,
-            "chunk": c,
-        })
-    conn._send_json({"type": "upload_move_finish", "upload_id": upload_id})
-    conn._send_json({
-        "type": "play_uploaded_move",
-        "upload_id": upload_id,
-        "play_frequency": freq,
-        "initial_goto_duration": ease_in,
-    })
-    return upload_id
+from reachy_mini_link.play import upload_and_play  # noqa: E402
 
 
 def main():

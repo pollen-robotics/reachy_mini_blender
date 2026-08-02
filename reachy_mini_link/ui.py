@@ -4,10 +4,11 @@ Layout is the 3D viewport sidebar (N) under a "Reachy Mini" tab.
 """
 
 import math
+import time
 
 import bpy
 
-from . import bake, bridge, rig, sync
+from . import bake, bridge, play, rig, sync
 
 
 # Module-level state for test_pose timer-driven sequence.
@@ -284,6 +285,65 @@ class REACHY_MINI_OT_bridge_stop(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class REACHY_MINI_OT_play_on_robot(bpy.types.Operator):
+    """Bake the timeline and play it on the robot's own clock (via the daemon)"""
+
+    bl_idname = "reachy_mini.play_on_robot"
+    bl_label = "Play on Robot"
+
+    def execute(self, context):
+        # A live stream and daemon-side playback fight each other: the
+        # daemon drops streamed targets while a move plays and vice
+        # versa (see _test_pose_in_flight's docstring).
+        if sync.is_running():
+            self.report({"ERROR"},
+                        "Reachy Mini: stop sync before playing the timeline")
+            return {"CANCELLED"}
+        if _test_pose_in_flight():
+            self.report({"ERROR"},
+                        "Reachy Mini: wait for the test pose sequence to end")
+            return {"CANCELLED"}
+
+        props = context.scene.reachy_mini_link
+        scene = context.scene
+        start = None if props.use_scene_range else props.frame_start
+        end = None if props.use_scene_range else props.frame_end
+        try:
+            move = bake.bake(
+                scene, mapping=_mapping(props),
+                description=props.description,
+                frame_start=start, frame_end=end,
+            )
+        except (rig.RigError, ValueError) as exc:
+            self.report({"ERROR"}, f"Reachy Mini: {exc}")
+            return {"CANCELLED"}
+
+        from . import client
+        conn = client.WSClient()
+        try:
+            conn.connect(props.host, props.port)
+            # The daemon picks its own body yaw unless told otherwise,
+            # which would override the yaw baked into the move.
+            conn.set_automatic_body_yaw(False)
+            conn.set_torque(True)
+            time.sleep(0.3)
+            play.upload_and_play(conn, move, freq=100.0, ease_in=1.0)
+            # Let the upload flush before closing; playback is daemon-side
+            # and survives the disconnect.
+            time.sleep(0.5)
+        except ConnectionError as exc:
+            self.report({"ERROR"}, f"Reachy Mini: {exc}")
+            return {"CANCELLED"}
+        finally:
+            conn.disconnect()
+
+        duration = move["time"][-1]
+        self.report({"INFO"},
+                    f"Playing {len(move['time'])} frames ({duration:.1f}s) "
+                    f"on {props.host}:{props.port}")
+        return {"FINISHED"}
+
+
 class REACHY_MINI_OT_export_move(bpy.types.Operator):
     """Bake the timeline to a Reachy Mini move JSON"""
 
@@ -391,7 +451,9 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             row = box.row(align=True)
             row.prop(props, "frame_start")
             row.prop(props, "frame_end")
-        box.operator("reachy_mini.export_move", icon="FILE_TICK")
+        row = box.row(align=True)
+        row.operator("reachy_mini.export_move", icon="FILE_TICK")
+        row.operator("reachy_mini.play_on_robot", icon="PLAY")
 
         box = layout.box()
         box.label(text="Advanced")
@@ -406,6 +468,7 @@ _classes = (
     REACHY_MINI_OT_cancel_test_pose,
     REACHY_MINI_OT_bridge_start,
     REACHY_MINI_OT_bridge_stop,
+    REACHY_MINI_OT_play_on_robot,
     REACHY_MINI_OT_export_move,
     REACHY_MINI_PT_link,
 )
