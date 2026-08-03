@@ -651,17 +651,18 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             sub.operator("reachy_mini.send_test_pose", icon="OUTLINER_OB_ARMATURE")
             row.operator("reachy_mini.reset_rig", icon="LOOP_BACK")
 
-        # ── Timeline: play it on the robot, or export it as a file ─────
+        # ── Timeline: what the move is, and playing it on the robot ────
         box = layout.box()
         box.label(text="Timeline", icon="SEQUENCE")
-        box.prop(props, "description")
-        if audio.scene_has_audio(context.scene):
-            box.label(text="Audio plays with the move", icon="SOUND")
-        box.prop(props, "use_scene_range")
+        col = box.column(align=True)
+        col.prop(props, "description")
+        col.prop(props, "use_scene_range")
         if not props.use_scene_range:
-            row = box.row(align=True)
+            row = col.row(align=True)
             row.prop(props, "frame_start")
             row.prop(props, "frame_end")
+        if audio.scene_has_audio(context.scene):
+            box.label(text="Audio plays with the move", icon="SOUND")
 
         pl = play.state
         if pl["status"] == "playing":
@@ -681,12 +682,18 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             elif pl["status"] == "error":
                 box.label(text=f"Play failed: {pl['detail']}", icon="ERROR")
 
+        # ── Share: export to disk, publish to the Hub ───────────────────
+        box = layout.box()
+        box.label(text="Share", icon="EXPORT")
         col = box.column(align=True)
         col.prop(props, "out_path")
         if not bpy.data.filepath and props.out_path.startswith("//"):
             col.label(text="Save the .blend first, or use an absolute path",
                       icon="ERROR")
-        row = col.row(align=True)
+
+        box.separator(factor=0.5)
+
+        row = box.row(align=True)
         row.operator("reachy_mini.export_move", icon="FILE_TICK")
         sub = row.row(align=True)
         sub.enabled = hub.state["status"] == "ok" \
@@ -703,18 +710,17 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         elif pub["status"] == "error":
             box.label(text=f"Publish failed: {pub['detail']}", icon="ERROR")
 
-        # ── Hugging Face: sign-in state (publishing lands here) ────────
-        box = layout.box()
+        # Sign-in state lives with publishing, the only thing that needs it.
         st = hub.state
         if st["status"] == "ok":
             box.label(text=f"Signed in as {st['user']}", icon="CHECKMARK")
         elif st["status"] == "checking":
             box.label(text="Hugging Face: checking…", icon="TIME")
         elif st["status"] == "error":
-            box.label(text=f"Hugging Face: {st['error'] or 'error'}",
+            row = box.row(align=True)
+            row.label(text=f"Hugging Face: {st['error'] or 'error'}",
                       icon="ERROR")
-            box.operator("reachy_mini.hf_check", text="Retry",
-                         icon="FILE_REFRESH")
+            row.operator("reachy_mini.hf_check", text="", icon="FILE_REFRESH")
         elif st["status"] == "no_token":
             box.label(text="Hugging Face: not signed in", icon="RADIOBUT_OFF")
             row = box.row(align=True)

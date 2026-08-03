@@ -241,7 +241,8 @@ account it found).
 
 ### Exporting a move
 
-Use the panel — the "Timeline" section of the "Reachy Mini" sidebar tab:
+Use the panel — **Description** and the frame range live in the "Timeline"
+section, **Output** and the buttons in "Share":
 
 | Field | Meaning |
 |---|---|
