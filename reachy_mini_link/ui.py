@@ -656,8 +656,7 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         box.label(text="Timeline", icon="SEQUENCE")
         box.prop(props, "description")
         if audio.scene_has_audio(context.scene):
-            box.label(text="Sequencer audio will play with the move",
-                      icon="SOUND")
+            box.label(text="Audio plays with the move", icon="SOUND")
         box.prop(props, "use_scene_range")
         if not props.use_scene_range:
             row = box.row(align=True)
@@ -668,7 +667,7 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         if pl["status"] == "playing":
             row = box.row(align=True)
             row.scale_y = 1.3
-            row.label(text=f"Playing on robot · {pl['detail']}", icon="PLAY")
+            row.label(text=f"Playing · {pl['detail']}", icon="PLAY")
             row.operator("reachy_mini.stop_robot_play", icon="SNAP_FACE")
         else:
             row = box.row()
