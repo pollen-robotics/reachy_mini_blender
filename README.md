@@ -201,9 +201,11 @@ move duration plus a margin — worth knowing if you're scripting the daemon dir
 
 **Play on Robot** (in the "Timeline" section) bakes the timeline and uploads it to the
 daemon, which plays it back on its own 100 Hz clock — frame-accurate, no network jitter,
-and playback survives Blender closing. Works with the Host/Port set in "Robot":
-`127.0.0.1` for a Lite plugged into this machine, the robot's address for a wireless one
-on your network. The same thing from the shell is `play_move.py`.
+and playback survives Blender closing. The upload runs in the background: the panel
+shows the status (Sending, then Playing with the duration) and a **Stop** button that
+cancels the move mid-play. Works with the Host/Port set in "Robot": `127.0.0.1` for a
+Lite plugged into this machine, the robot's address for a wireless one on your network.
+The same thing from the shell is `play_move.py`.
 
 ### Sound
 
