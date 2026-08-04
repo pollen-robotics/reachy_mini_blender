@@ -83,6 +83,40 @@ class CloseLoopTest(unittest.TestCase):
                                places=3)
 
 
+class AutoBlendTest(unittest.TestCase):
+    """blend=None sizes the return from the pose gap and move speed."""
+
+    def tearDown(self):
+        _clear_animation()
+
+    def _import(self, duration):
+        _clear_animation()
+        fps = bpy.context.scene.render.fps
+        move_path = _write_move(_synthetic_move(fps, duration=duration))
+        import_move.apply(bpy.context, move_path, load_audio=False)
+
+    def test_auto_blend_within_bounds(self):
+        self._import(2.0)
+        stats = seamless.close_loop(bpy.context)
+        self.assertGreaterEqual(stats["blend"], seamless._BLEND_MIN)
+        self.assertLessEqual(stats["blend"], seamless._BLEND_MAX)
+
+    def test_closed_move_gets_minimal_return(self):
+        """After one closing pass the gap is zero: pass two is minimal."""
+        self._import(2.0)
+        far = seamless.close_loop(bpy.context)
+        near = seamless.close_loop(bpy.context)
+        self.assertLessEqual(near["blend"], far["blend"])
+        self.assertAlmostEqual(near["blend"], seamless._BLEND_MIN, places=6)
+
+    def test_still_closes_the_loop(self):
+        self._import(2.0)
+        seamless.close_loop(bpy.context)
+        for fc in _move_fcurves():
+            first, last = fc.keyframe_points[0], fc.keyframe_points[-1]
+            self.assertAlmostEqual(last.co[1], first.co[1], places=6)
+
+
 class CloseLoopIdempotentTest(unittest.TestCase):
     """Closing an already-closed loop only appends another still tail."""
 

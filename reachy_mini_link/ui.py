@@ -733,26 +733,38 @@ chaining it on the robot shows no pop at the seam"""
     bl_label = "Make Loop"
     bl_options = {"REGISTER", "UNDO"}
 
+    auto_time: bpy.props.BoolProperty(
+        name="Auto Return Time", default=True,
+        description=("Size the return from how far the end pose is: the "
+                     "gap travelled at the move's own top speed. Uncheck "
+                     "to set the duration by hand"))
     blend: bpy.props.FloatProperty(
         name="Return Time", default=0.5, min=0.1, max=5.0, step=10,
         precision=1, subtype="TIME_ABSOLUTE",
         description=("Seconds appended after the scene end to travel "
                      "back to the starting pose"))
 
+    def draw(self, _context):
+        self.layout.prop(self, "auto_time")
+        row = self.layout.row()
+        row.enabled = not self.auto_time
+        row.prop(self, "blend")
+
     def execute(self, context):
         try:
-            stats = seamless.close_loop(context, blend=self.blend,
-                                        mapping=_mapping(
-                                            context.scene.reachy_mini_link))
+            stats = seamless.close_loop(
+                context, blend=None if self.auto_time else self.blend,
+                mapping=_mapping(context.scene.reachy_mini_link))
         except rig.RigError as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
         if not stats["channels"]:
             self.report({"WARNING"}, "Nothing keyed to loop")
             return {"CANCELLED"}
+        auto = " (auto)" if self.auto_time else ""
         self.report({"INFO"},
                     f"Loop closed: {stats['channels']} channels return to "
-                    f"the start over {stats['blend']:.1f}s")
+                    f"the start over {stats['blend']:.2f}s{auto}")
         return {"FINISHED"}
 
 

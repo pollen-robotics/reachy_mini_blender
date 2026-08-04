@@ -301,10 +301,14 @@ Recorded captures almost never end exactly where they started, so
 repeating or chaining them on the robot pops at the seam — and closing
 the loop by hand means matching nine channels' end values *and*
 tangents against their first keys. **Make Loop** (in the "Timeline"
-section) does it in one click: it appends a short return-to-start
-(0.5 s by default — adjustable in the operator's redo panel) after the
+section) does it in one click: it appends a return-to-start after the
 scene end, keys every move channel back to its first key's value, and
-mirrors the start's outgoing slope at the junction. The result is
+mirrors the start's outgoing slope at the junction. The return's
+duration is sized automatically from how far the end pose actually is:
+the gap travelled at the move's own peak speed — a move ending near its
+start gets a blink of a return, one ending far away gets the time it
+needs (0.15–2 s; untick *Auto Return Time* in the operator's redo panel
+to set it by hand). The result is
 continuous in both pose and velocity — `f(end) == f(start)` and
 `f'(end) == f'(start)` on every channel — so the exported file loops
 without a hitch. The scene range extends to cover the return segment,
