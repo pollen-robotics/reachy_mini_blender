@@ -264,12 +264,13 @@ The file-browser sidebar has the knobs:
 place — Marionette recordings, the official
 [emotions](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library)
 and dances libraries, and moves published by this add-on (anything in a
-dataset tagged `reachy_mini_community_moves`). Pick one in the list — the
-search box filters by move name, author or dataset, the note icon marks
-moves that ship audio — and **Import Selected** downloads it and runs the
-same import/cleanup pipeline as a local file. No sign-in needed; a token is
-used only if one is already around (it also lets your own private datasets
-show up).
+dataset tagged `reachy_mini_community_moves`). The list shows one
+collapsible folder per dataset (with its move count); click a folder to
+unfold its moves — the note icon marks moves that ship audio, and the
+search box filters rows by name. Select a move and **Import Selected**
+downloads it and runs the same import/cleanup pipeline as a local file. No
+sign-in needed; a token is used only if one is already around (it also
+lets your own private datasets show up).
 
 Downloads are cached per user (`~/Library/Caches/reachy_mini_link` on
 macOS, `~/.cache/reachy_mini_link` on Linux, `%LOCALAPPDATA%` on Windows)

@@ -650,43 +650,95 @@ on the rig, cleaned up for hand editing"""
 
 
 class ReachyHubMoveItem(bpy.types.PropertyGroup):
-    """One row of the Hub move browser. `name` doubles as the display
-    label and what the list's search box filters on."""
+    """One row of the Hub move browser - a dataset folder or a move.
+    `name` doubles as the display label and what the list's search box
+    filters on."""
 
     repo_id: bpy.props.StringProperty()
     path: bpy.props.StringProperty()
     audio_path: bpy.props.StringProperty()
+    is_dataset: bpy.props.BoolProperty(default=False)
+
+
+# Datasets the user has unfolded. Module-level (not a bpy prop): plain
+# runtime UI state, rebuilt rows read it, nothing to persist.
+_hub_expanded = set()
 
 
 class REACHY_MINI_UL_hub_moves(bpy.types.UIList):
     def draw_item(self, _context, layout, _data, item, _icon,
                   _active_data, _active_prop):
-        layout.label(text=item.name,
-                     icon="SOUND" if item.audio_path else "BLANK1")
+        row = layout.row(align=True)
+        if item.is_dataset:
+            tri = ("TRIA_DOWN" if item.repo_id in _hub_expanded
+                   else "TRIA_RIGHT")
+            op = row.operator("reachy_mini.hub_toggle_dataset",
+                              text=item.name, icon=tri, emboss=False)
+            op.repo_id = item.repo_id
+        else:
+            row.label(text="", icon="BLANK1")
+            row.label(text=item.name,
+                      icon="SOUND" if item.audio_path else "BLANK1")
 
 
-def _hub_moves_ready():
-    """Worker callback: mirror the fetched list into the window manager.
+def _rebuild_hub_rows():
+    """Mirror the fetched move list into window-manager rows.
 
-    Collection properties are bpy data, so the copy happens on the main
-    thread via a one-shot timer. WindowManager (not Scene) on purpose:
-    the browser is a transient view of the Hub, not something to save
-    into the .blend.
+    One folder row per dataset; a dataset's moves appear under it only
+    while unfolded. Runs on the main thread (collection props are bpy
+    data). WindowManager, not Scene, on purpose: the browser is a
+    transient view of the Hub, not something to save into the .blend.
     """
-    def fill():
-        wm = bpy.context.window_manager
-        wm.reachy_hub_moves.clear()
-        for mv in hub_import.state["moves"]:
+    wm = bpy.context.window_manager
+    wm.reachy_hub_moves.clear()
+    for repo_id, moves in hub_import.group_moves(hub_import.state["moves"]):
+        folder = wm.reachy_hub_moves.add()
+        folder.name = f"{repo_id}  ({len(moves)})"
+        folder.repo_id = repo_id
+        folder.is_dataset = True
+        if repo_id not in _hub_expanded:
+            continue
+        for mv in moves:
             item = wm.reachy_hub_moves.add()
-            item.name = mv["label"]
+            item.name = mv["name"]
             item.repo_id = mv["repo_id"]
             item.path = mv["path"]
             item.audio_path = mv["audio_path"] or ""
-        wm.reachy_hub_moves_index = 0
+    wm.reachy_hub_moves_index = min(
+        wm.reachy_hub_moves_index, max(len(wm.reachy_hub_moves) - 1, 0))
+
+
+def _hub_moves_ready():
+    """Worker callback: hop onto the main thread and rebuild the rows."""
+    def fill():
+        _rebuild_hub_rows()
+        bpy.context.window_manager.reachy_hub_moves_index = 0
         return None
 
     bpy.app.timers.register(fill, first_interval=0.0)
     _redraw_later()
+
+
+class REACHY_MINI_OT_hub_toggle_dataset(bpy.types.Operator):
+    """Fold or unfold this dataset's moves"""
+
+    bl_idname = "reachy_mini.hub_toggle_dataset"
+    bl_label = "Toggle Dataset"
+
+    repo_id: bpy.props.StringProperty()
+
+    def execute(self, context):
+        if self.repo_id in _hub_expanded:
+            _hub_expanded.discard(self.repo_id)
+        else:
+            _hub_expanded.add(self.repo_id)
+        _rebuild_hub_rows()
+        wm = context.window_manager
+        for i, item in enumerate(wm.reachy_hub_moves):
+            if item.is_dataset and item.repo_id == self.repo_id:
+                wm.reachy_hub_moves_index = i
+                break
+        return {"FINISHED"}
 
 
 def _hub_move_downloaded():
@@ -736,6 +788,10 @@ class REACHY_MINI_OT_hub_import_selected(bpy.types.Operator):
             self.report({"ERROR"}, "Reachy Mini: no move selected")
             return {"CANCELLED"}
         item = wm.reachy_hub_moves[index]
+        if item.is_dataset:
+            self.report({"ERROR"},
+                        "Reachy Mini: select a move, not a dataset")
+            return {"CANCELLED"}
         hub_import.download_move_async(
             {"repo_id": item.repo_id, "path": item.path,
              "audio_path": item.audio_path or None,
@@ -872,9 +928,12 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
                               wm, "reachy_hub_moves",
                               wm, "reachy_hub_moves_index", rows=6)
             dl = hub_import.download
+            index = wm.reachy_hub_moves_index
+            on_move = (0 <= index < len(wm.reachy_hub_moves)
+                       and not wm.reachy_hub_moves[index].is_dataset)
             row = box.row(align=True)
             sub = row.row(align=True)
-            sub.enabled = dl["status"] != "working"
+            sub.enabled = dl["status"] != "working" and on_move
             sub.operator("reachy_mini.hub_import_selected", icon="IMPORT")
             row.operator("reachy_mini.hub_browse_moves", text="",
                          icon="FILE_REFRESH")
@@ -965,6 +1024,7 @@ _classes = (
     REACHY_MINI_OT_import_move,
     ReachyHubMoveItem,
     REACHY_MINI_UL_hub_moves,
+    REACHY_MINI_OT_hub_toggle_dataset,
     REACHY_MINI_OT_hub_browse_moves,
     REACHY_MINI_OT_hub_import_selected,
     REACHY_MINI_OT_hub_browse_close,

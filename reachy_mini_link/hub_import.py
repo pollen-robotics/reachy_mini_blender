@@ -91,6 +91,21 @@ def sort_moves(moves):
         not m["repo_id"].startswith("pollen-robotics/"), m["label"].lower()))
 
 
+def group_moves(moves):
+    """[(repo_id, [moves])] - datasets in display order, moves sorted.
+
+    The browse UI shows one collapsible folder per dataset; official
+    pollen-robotics libraries come first, then alphabetical.
+    """
+    groups = {}
+    for mv in moves:
+        groups.setdefault(mv["repo_id"], []).append(mv)
+    order = sorted(groups, key=lambda r: (
+        not r.startswith("pollen-robotics/"), r.lower()))
+    return [(repo, sorted(groups[repo], key=lambda m: m["name"].lower()))
+            for repo in order]
+
+
 def repo_moves(repo_id, get):
     """All moves in one dataset, trying both layouts in use.
 

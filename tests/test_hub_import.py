@@ -83,6 +83,22 @@ class RepoMovesTest(unittest.TestCase):
             hub_import.repo_moves("u/d", lambda url: []), [])
 
 
+class GroupMovesTest(unittest.TestCase):
+    def test_groups_by_repo_pollen_first(self):
+        moves = [
+            {"repo_id": "zz/set", "name": "b"},
+            {"repo_id": "pollen-robotics/lib", "name": "z"},
+            {"repo_id": "zz/set", "name": "a"},
+        ]
+        groups = hub_import.group_moves(moves)
+        self.assertEqual([g[0] for g in groups],
+                         ["pollen-robotics/lib", "zz/set"])
+        self.assertEqual([m["name"] for m in groups[1][1]], ["a", "b"])
+
+    def test_empty(self):
+        self.assertEqual(hub_import.group_moves([]), [])
+
+
 class CachePathTest(unittest.TestCase):
     def test_local_dir_flattens_repo_id(self):
         d = hub_import.local_dir("someone/their-moves")
