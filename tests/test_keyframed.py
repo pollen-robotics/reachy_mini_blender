@@ -36,7 +36,8 @@ def _fcurve_snapshot():
         for kp in fc.keyframe_points:
             keys.append((tuple(kp.co), tuple(kp.handle_left),
                          tuple(kp.handle_right), kp.interpolation,
-                         kp.handle_left_type, kp.handle_right_type))
+                         kp.handle_left_type, kp.handle_right_type,
+                         kp.easing, kp.back, kp.amplitude, kp.period))
         out[(fc.data_path, fc.array_index)] = keys
     return out
 
@@ -52,7 +53,8 @@ class ExactRoundtripTest(unittest.TestCase):
         import_move.apply(bpy.context, move_path, load_audio=False)
 
         # Hand-edit like an animator: move a handle, switch a key to
-        # LINEAR - the roundtrip must keep all of it.
+        # LINEAR, make another ELASTIC with tuned easing - the roundtrip
+        # must keep all of it.
         arm = bpy.data.objects["Armature"]
         cb = keyframed._channelbag(arm)
         fc = next(f for f in cb.fcurves if len(f.keyframe_points) >= 3)
@@ -61,6 +63,11 @@ class ExactRoundtripTest(unittest.TestCase):
         kp2 = fc.keyframe_points[2]
         kp2.handle_left_type = "FREE"
         kp2.handle_left = (kp2.handle_left[0] - 1.0, kp2.handle_left[1] + 0.01)
+        kp0 = fc.keyframe_points[0]
+        kp0.interpolation = "ELASTIC"
+        kp0.easing = "EASE_OUT"
+        kp0.amplitude = 0.6
+        kp0.period = 3.5
         fc.update()
 
         cls.before = _fcurve_snapshot()

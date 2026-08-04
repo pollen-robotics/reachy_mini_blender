@@ -21,15 +21,21 @@ Format (version 1):
           "keys": [
             # time_s, value, left handle (time_s, value),
             # right handle (time_s, value), interpolation,
-            # left handle type, right handle type
+            # left handle type, right handle type,
+            # easing, back, amplitude, period
             [0.0, 0.1, -0.05, 0.1, 0.05, 0.1,
-             "BEZIER", "FREE", "FREE"],
+             "BEZIER", "FREE", "FREE", "AUTO", 0.0, 0.0, 0.0],
             ...
           ]
         },
         ...
       ]
     }
+
+The easing quartet covers the dynamic interpolation modes (SINE through
+BOUNCE): easing picks the ease side, back/amplitude/period shape BACK
+and ELASTIC/BOUNCE. They are meaningless (and ignored by Blender) on
+BEZIER/LINEAR/CONSTANT keys but always written, keeping entries uniform.
 
 Key times are seconds from the scene start frame, not frame numbers, so
 the sidecar survives a change of scene fps (keys then land on
@@ -123,6 +129,7 @@ def collect(context, mapping=None):
                 (kp.handle_left[0] - frame0) / fps, kp.handle_left[1],
                 (kp.handle_right[0] - frame0) / fps, kp.handle_right[1],
                 kp.interpolation, kp.handle_left_type, kp.handle_right_type,
+                kp.easing, kp.back, kp.amplitude, kp.period,
             ])
         channels.append({"data_path": data_path,
                          "array_index": array_index, "keys": keys})
@@ -156,7 +163,7 @@ def load(path):
         if not isinstance(ch.get("keys"), list) or not ch["keys"]:
             raise KeysFormatError("channel without keys")
         for key in ch["keys"]:
-            if len(key) != 9:
+            if len(key) != 13:
                 raise KeysFormatError("malformed key entry")
     return data
 
@@ -212,9 +219,14 @@ def apply(context, filepath, mapping=None, load_audio=True):
         fc = cb.fcurves.new(ch["data_path"], index=ch["array_index"])
         fc.keyframe_points.add(len(ch["keys"]))
         for kp, key in zip(fc.keyframe_points, ch["keys"]):
-            (t, v, hlt, hlv, hrt, hrv, ipo, hl_type, hr_type) = key
+            (t, v, hlt, hlv, hrt, hrv, ipo, hl_type, hr_type,
+             easing, back, amplitude, period) = key
             kp.co = (frame0 + t * fps, v)
             kp.interpolation = ipo
+            kp.easing = easing
+            kp.back = back
+            kp.amplitude = amplitude
+            kp.period = period
             kp.handle_left_type = hl_type
             kp.handle_right_type = hr_type
             kp.handle_left = (frame0 + hlt * fps, hlv)
