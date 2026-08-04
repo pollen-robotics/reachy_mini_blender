@@ -295,6 +295,23 @@ so the sound strip still resolves after a restart. Re-importing a move
 replaces the audio strip a previous import created; strips you added by
 hand are never touched.
 
+### Making a move loop seamlessly
+
+Recorded captures almost never end exactly where they started, so
+repeating or chaining them on the robot pops at the seam — and closing
+the loop by hand means matching nine channels' end values *and*
+tangents against their first keys. **Make Loop** (in the "Timeline"
+section) does it in one click: it appends a short return-to-start
+(0.5 s by default — adjustable in the operator's redo panel) after the
+scene end, keys every move channel back to its first key's value, and
+mirrors the start's outgoing slope at the junction. The result is
+continuous in both pose and velocity — `f(end) == f(start)` and
+`f'(end) == f'(start)` on every channel — so the exported file loops
+without a hitch. The scene range extends to cover the return segment,
+nothing already animated is altered, and the operation is a normal
+undoable edit: the return keys are plain keyframes you can keep
+polishing afterwards.
+
 ### Publishing to the Hub
 
 **Publish to Hub** (next to Export Move) bakes the timeline and pushes it to a

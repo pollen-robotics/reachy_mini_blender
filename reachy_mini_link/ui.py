@@ -10,7 +10,7 @@ import webbrowser
 import bpy
 
 from . import (audio, bake, discover, hub, hub_import, import_move,
-               keyframed, play, rig, sync)
+               keyframed, play, rig, seamless, sync)
 
 # The rigged model ships inside the add-on so installing the zip is the
 # whole setup - no separate .blend download.
@@ -724,6 +724,38 @@ on the rig, cleaned up for hand editing"""
         return {"FINISHED"}
 
 
+class REACHY_MINI_OT_make_seamless(bpy.types.Operator):
+    """Close the move into a seamless loop: append a short return to the
+starting pose, with matching speed at both ends, so repeating or
+chaining it on the robot shows no pop at the seam"""
+
+    bl_idname = "reachy_mini.make_seamless"
+    bl_label = "Make Loop"
+    bl_options = {"REGISTER", "UNDO"}
+
+    blend: bpy.props.FloatProperty(
+        name="Return Time", default=0.5, min=0.1, max=5.0, step=10,
+        precision=1, subtype="TIME_ABSOLUTE",
+        description=("Seconds appended after the scene end to travel "
+                     "back to the starting pose"))
+
+    def execute(self, context):
+        try:
+            stats = seamless.close_loop(context, blend=self.blend,
+                                        mapping=_mapping(
+                                            context.scene.reachy_mini_link))
+        except rig.RigError as exc:
+            self.report({"ERROR"}, f"Reachy Mini: {exc}")
+            return {"CANCELLED"}
+        if not stats["channels"]:
+            self.report({"WARNING"}, "Nothing keyed to loop")
+            return {"CANCELLED"}
+        self.report({"INFO"},
+                    f"Loop closed: {stats['channels']} channels return to "
+                    f"the start over {stats['blend']:.1f}s")
+        return {"FINISHED"}
+
+
 class ReachyHubMoveItem(bpy.types.PropertyGroup):
     """One row of the Hub move browser - a dataset folder or a move.
     `name` doubles as the display label and what the list's search box
@@ -1006,6 +1038,7 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
         row = box.row(align=True)
         row.operator("reachy_mini.import_move", icon="IMPORT")
         row.operator("reachy_mini.hub_browse_moves", icon="URL")
+        box.operator("reachy_mini.make_seamless", icon="LOOP_BACK")
 
         hst = hub_import.state
         wm = context.window_manager
@@ -1119,6 +1152,7 @@ _classes = (
     REACHY_MINI_OT_stop_robot_play,
     REACHY_MINI_OT_export_move,
     REACHY_MINI_OT_import_move,
+    REACHY_MINI_OT_make_seamless,
     ReachyHubMoveItem,
     REACHY_MINI_UL_hub_moves,
     REACHY_MINI_OT_hub_toggle_dataset,
