@@ -9,7 +9,7 @@ import webbrowser
 
 import bpy
 
-from . import audio, bake, discover, hub, play, rig, sync
+from . import audio, bake, discover, hub, import_move, play, rig, sync
 
 # The rigged model ships inside the add-on so installing the zip is the
 # whole setup - no separate .blend download.
@@ -254,7 +254,7 @@ def _mapping(props):
 
 
 def _bake_audio(operator, scene, start, end):
-    """OGG bytes for the scene's sequencer audio, or None.
+    """WAV bytes for the scene's sequencer audio, or None.
 
     Sound is opt-out by muting the strip, not by a setting: a sound
     strip in the sequencer means the artist animated against it. A
@@ -264,7 +264,7 @@ def _bake_audio(operator, scene, start, end):
     if not audio.scene_has_audio(scene):
         return None
     try:
-        return audio.mixdown_ogg(scene, frame_start=start, frame_end=end)
+        return audio.mixdown_wav(scene, frame_start=start, frame_end=end)
     except RuntimeError as exc:
         operator.report({"WARNING"},
                         f"Reachy Mini: audio mixdown failed ({exc}); "
@@ -563,11 +563,11 @@ class REACHY_MINI_OT_export_move(bpy.types.Operator):
         except (rig.RigError, OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
-        # Audio goes next to the JSON as a .ogg sidecar, the same layout
-        # the daemon's move folders and Marionette datasets use.
+        # Audio goes next to the JSON as a .wav sidecar, the one layout
+        # every player (daemon, Marionette, this add-on) understands.
         audio_bytes = _bake_audio(self, scene, start, end)
         if audio_bytes:
-            sidecar = str(pathlib.Path(resolved_path).with_suffix(".ogg"))
+            sidecar = str(pathlib.Path(resolved_path).with_suffix(".wav"))
             try:
                 with open(sidecar, "wb") as fh:
                     fh.write(audio_bytes)
@@ -580,6 +580,71 @@ class REACHY_MINI_OT_export_move(bpy.types.Operator):
         self.report({"INFO"},
                     f"Wrote {len(move['time'])} frames to "
                     f"{resolved_path}{with_audio}")
+        return {"FINISHED"}
+
+
+class REACHY_MINI_OT_import_move(bpy.types.Operator):
+    """Load a recorded move (Marionette, Hub dataset...) as keyframes
+on the rig, cleaned up for hand editing"""
+
+    bl_idname = "reachy_mini.import_move"
+    bl_label = "Import Move"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.json",
+                                          options={"HIDDEN"})
+
+    smooth_sigma: bpy.props.FloatProperty(
+        name="Smoothing", default=0.02, min=0.0, max=0.5, step=1,
+        precision=2, subtype="TIME_ABSOLUTE",
+        description=("Gaussian low-pass width in seconds. Softens capture "
+                     "jitter before keyframes are placed; 0 keeps the raw "
+                     "signal"))
+    tolerance: bpy.props.FloatProperty(
+        name="Simplify", default=1.0, min=0.0, max=10.0,
+        description=("How far the cleaned curves may drift from the "
+                     "recording (1.0 \u2248 0.5 mm / 0.3\u00b0, invisible on "
+                     "the robot). Higher keeps fewer keys; 0 keys every "
+                     "sample"))
+    snap_to_frames: bpy.props.BoolProperty(
+        name="Snap Keys to Frames", default=True,
+        description=("Round keys to whole frames so they are draggable in "
+                     "the dope sheet. Costs at most half a frame of timing"))
+    load_audio: bpy.props.BoolProperty(
+        name="Load Audio", default=True,
+        description=("Add the move's audio sidecar (.wav/.ogg next to the "
+                     "JSON) as a sequencer strip"))
+    set_scene_range: bpy.props.BoolProperty(
+        name="Set Scene Range", default=True,
+        description="Fit the scene frame range to the imported move")
+
+    def invoke(self, context, _event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        try:
+            stats = import_move.apply(
+                context, self.filepath, mapping=_mapping(
+                    context.scene.reachy_mini_link),
+                smooth_sigma=self.smooth_sigma, tolerance=self.tolerance,
+                snap_to_frames=self.snap_to_frames,
+                load_audio=self.load_audio,
+                set_scene_range=self.set_scene_range)
+        except (import_move.MoveFormatError, rig.RigError, OSError) as exc:
+            self.report({"ERROR"}, f"Reachy Mini: {exc}")
+            return {"CANCELLED"}
+        if stats["samples"]:
+            with_audio = " + audio" if stats["audio"] else ""
+            self.report(
+                {"INFO"},
+                f"Imported {stats['duration']:.1f}s: {stats['samples']} "
+                f"samples \u2192 {stats['keys']} keys{with_audio}")
+        elif stats["audio"]:
+            self.report({"INFO"}, "Audio-only move: added a sound strip")
+        else:
+            self.report({"WARNING"}, "Move had no motion and no audio")
         return {"FINISHED"}
 
 
@@ -682,6 +747,8 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             elif pl["status"] == "error":
                 box.label(text=f"Play failed: {pl['detail']}", icon="ERROR")
 
+        box.operator("reachy_mini.import_move", icon="IMPORT")
+
         # ── Share: export to disk, publish to the Hub ───────────────────
         box = layout.box()
         box.label(text="Share", icon="EXPORT")
@@ -758,6 +825,7 @@ _classes = (
     REACHY_MINI_OT_play_on_robot,
     REACHY_MINI_OT_stop_robot_play,
     REACHY_MINI_OT_export_move,
+    REACHY_MINI_OT_import_move,
     REACHY_MINI_PT_link,
 )
 

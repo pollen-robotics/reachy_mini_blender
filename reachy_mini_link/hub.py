@@ -152,7 +152,7 @@ add-on. Marionette-compatible layout:
 
 - `data/<move>.json` - the motion (`RecordedMove`: description, time,
   set_target_data), canonicalized to <=50 Hz / 6 decimals.
-- `data/<move>.ogg` - optional audio sidecar, played by the daemon in
+- `data/<move>.wav` - optional audio sidecar, played by the daemon in
   lockstep with the motion.
 """
 
@@ -256,14 +256,15 @@ def _commit_files(token, repo_id, files, message):
 
 def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
                        audio=None, on_done=None):
-    """Bundle `move` (and optional OGG `audio` bytes) into
+    """Bundle `move` (and optional WAV `audio` bytes) into
     <user>/<dataset_name> on the Hub, in Marionette's community layout.
 
     Creates the dataset (with a datacard) on first use. The move lands
     at data/<slug-of-description>.json, the audio next to it as
-    data/<slug>.ogg; publishing the same description again overwrites
-    both, which is the predictable thing: the description is the
-    move's identity across the ecosystem.
+    data/<slug>.wav (the one container Marionette's loader looks for);
+    publishing the same description again overwrites both, which is
+    the predictable thing: the description is the move's identity
+    across the ecosystem.
     """
     with _lock:
         if publish["status"] == "working":
@@ -281,7 +282,7 @@ def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
             path = f"{stem}.json"
             files = [(path, json.dumps(canonicalize(move)).encode())]
             if audio:
-                files.append((f"{stem}.ogg", audio))
+                files.append((f"{stem}.wav", audio))
             if not _dataset_exists(token, repo_id):
                 _create_dataset(token, dataset_name)
                 files.append(("README.md", _DATACARD.encode()))

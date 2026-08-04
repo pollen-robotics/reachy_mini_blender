@@ -27,8 +27,8 @@ Flags:
                   robot happens to be)
   --freq HZ       daemon playback tick rate (default 100)
   --no-wait       return as soon as playback is requested
-  --audio PATH    audio file to play with the move; when omitted, a .ogg
-                  sidecar next to the move JSON is picked up automatically
+  --audio PATH    audio file to play with the move; when omitted, a .wav or
+                  .ogg sidecar next to the move JSON is picked up automatically
   --no-audio      skip the sidecar even if one exists
 """
 
@@ -74,9 +74,12 @@ def main():
     audio_bytes = None
     audio_path = a.audio
     if audio_path is None and not a.no_audio:
-        sidecar = os.path.splitext(a.move_file)[0] + ".ogg"
-        if os.path.exists(sidecar):
-            audio_path = sidecar
+        stem = os.path.splitext(a.move_file)[0]
+        # .wav first: it is the sidecar this repo and Marionette write.
+        for ext in (".wav", ".ogg"):
+            if os.path.exists(stem + ext):
+                audio_path = stem + ext
+                break
     if audio_path and not a.no_audio:
         try:
             with open(audio_path, "rb") as fh:

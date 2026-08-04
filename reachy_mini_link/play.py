@@ -56,7 +56,7 @@ def _upload(conn, upload_id, kind, payload_str, start_extra):
 
 def upload_and_play(conn, move, freq=100.0, ease_in=1.0,
                     audio=None, audio_lead_ms=0.0):
-    """Upload `move` (and optional OGG `audio` bytes) and request playback.
+    """Upload `move` (and optional WAV `audio` bytes) and request playback.
 
     Returns the upload id. Fire-and-forget: the caller may disconnect
     once the socket has flushed; the daemon keeps playing. Audio shares
@@ -71,7 +71,7 @@ def upload_and_play(conn, move, freq=100.0, ease_in=1.0,
     })
     if audio:
         _upload(conn, upload_id, "audio", base64.b64encode(audio).decode(), {
-            "encoding": "ogg-base64",
+            "encoding": "wav-base64",
             "description": move.get("description", ""),
         })
     conn._send_json({

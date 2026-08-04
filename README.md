@@ -215,15 +215,43 @@ audio along automatically:
 
 - **Play on Robot** uploads it with the move; the daemon starts its own
   playback (GStreamer, on the robot's speaker) in lockstep with the motion.
-- **Publish to Hub** pushes it as a `data/<slug>.ogg` sidecar next to the
+- **Publish to Hub** pushes it as a `data/<slug>.wav` sidecar next to the
   move JSON — the same convention Marionette and the daemon's move folders
-  use.
-- **Export Move** writes a `.ogg` next to the output JSON, which
+  use (Marionette's loader only looks for `.wav`).
+- **Export Move** writes a `.wav` next to the output JSON, which
   `play_move.py` picks up automatically.
 
 The mixdown is rendered by Blender itself over the exported frame range, so
 whatever you hear when scrubbing is what the robot plays. Mute the strip to
 export motion-only.
+
+### Importing a recorded move
+
+**Import Move** (bottom of the "Timeline" section) does the reverse trip: a
+`RecordedMove` JSON — recorded with
+[Marionette](https://huggingface.co/spaces/RemiFabre/marionette), downloaded
+from a community dataset on the Hub, or exported by this add-on — becomes
+editable keyframes on the rig. Raw captures are 30–100 Hz and noisy, so each
+channel is cleaned on the way in: a light low-pass takes out capture jitter,
+then the curve is simplified down to the keys that actually shape the motion
+(a 20 s puppeteered take typically lands at a few dozen keys per channel
+instead of ~600). The result is a normal hand-editable animation: polish it
+in the Graph Editor, then play, export, or publish it like anything else.
+
+Keys land where an animator would put them: head pose on `Head.001`, body
+yaw on its slider, antennas on the FK antenna bones. An audio sidecar
+(`.wav` or `.ogg` next to the JSON) is added as a sequencer strip so the
+sound survives the trip too.
+
+The file-browser sidebar has the knobs:
+
+| Option | Meaning |
+|---|---|
+| **Smoothing** | low-pass width in seconds. `0` keeps the raw signal |
+| **Simplify** | how far the cleaned curves may drift from the recording. `1.0` ≈ 0.5 mm / 0.3°, invisible on the robot; `0` keys every sample |
+| **Snap Keys to Frames** | round keys to whole frames (costs at most half a frame of timing) |
+| **Load Audio** | add the sidecar as a sequencer strip |
+| **Set Scene Range** | fit the scene frame range to the move |
 
 ### Publishing to the Hub
 
@@ -233,7 +261,7 @@ default, created with a datacard on first use. The layout and tag are
 Marionette's community-dataset conventions, so published moves show up in its
 community browser and import cleanly: the move lands at
 `data/<slug-of-description>.json` (canonicalized to ≤50 Hz / 6 decimals),
-audio beside it as `data/<slug>.ogg`, and the datacard carries the
+audio beside it as `data/<slug>.wav`, and the datacard carries the
 `reachy_mini_community_moves` tag. Publishing the same description again
 overwrites both files. Sign-in comes from the hf CLI token, the `HF_TOKEN`
 env var, or a token pasted in the add-on preferences (the panel shows which
@@ -301,7 +329,7 @@ playing moves/wave.json: 49 frames, 2.00s (+1.0s ease-in)
 | `--ease-in SECS` | interpolate to the move's first frame before playing (default `1.0`; `0` starts abruptly from wherever the head is) |
 | `--freq HZ` | daemon playback tick rate (default `100`) |
 | `--no-wait` | return as soon as playback is requested |
-| `--audio PATH` | audio file to play with the move (default: the `.ogg` sidecar next to the JSON, when present) |
+| `--audio PATH` | audio file to play with the move (default: the `.wav` or `.ogg` sidecar next to the JSON, when present) |
 | `--no-audio` | skip the sidecar even if one exists |
 
 It uploads the move to the daemon and asks the daemon to play it, so the daemon owns the

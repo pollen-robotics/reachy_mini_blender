@@ -44,7 +44,7 @@ class UploadAndPlayTest(unittest.TestCase):
         start = next(m for m in conn.sent
                      if m["type"] == "upload_audio_start")
         self.assertEqual(start["upload_id"], upload_id)
-        self.assertEqual(start["encoding"], "ogg-base64")
+        self.assertEqual(start["encoding"], "wav-base64")
         payload = "".join(m["chunk"] for m in conn.sent
                           if m["type"] == "upload_audio_chunk")
         self.assertEqual(base64.b64decode(payload), audio)
