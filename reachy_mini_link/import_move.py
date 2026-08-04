@@ -318,6 +318,9 @@ def apply(context, filepath, mapping=None, smooth_sigma=0.02, tolerance=1.0,
                 frame0 + 1, frame0 + int(math.ceil(times[-1] * fps)))
 
     if load_audio:
+        # A silent move must still clear the previous import's audio:
+        # the old strip belongs to the move being replaced.
+        _remove_imported_strips(scene)
         sidecar = find_audio_sidecar(filepath)
         if sidecar:
             _add_sound_strip(scene, sidecar, frame0)
@@ -472,21 +475,35 @@ def _fit_handles(fc, sample_frames, sample_values):
                          2.0 * last.co[1] - last.handle_left[1])
 
 
-def _add_sound_strip(scene, filepath, frame_start):
-    """Drop the sidecar on a free sequencer channel at the move's start.
+def _remove_imported_strips(scene):
+    """Drop the sound strip a previous import added, if any.
 
-    Strips added here are tagged, and a later import removes the tagged
-    ones first: imported motion replaces the previous move's fcurves, so
-    its audio replaces the previous sidecar too instead of stacking
-    into a chorus. Strips the user added by hand are left alone.
+    An import replaces the previous move's fcurves, so it must replace
+    (or simply remove, when the new move is silent) its audio strip too
+    instead of stacking into a chorus - only strips tagged by
+    _add_sound_strip are touched, the user's own strips are left alone.
     """
-    se = scene.sequence_editor_create()
+    se = scene.sequence_editor
+    if se is None:
+        return
     # Blender 5 renamed SequenceEditor.sequences to strips.
     strips = se.strips if hasattr(se, "strips") else se.sequences
     all_strips = (se.strips_all if hasattr(se, "strips_all")
                   else se.sequences_all)
     for strip in [s for s in all_strips if s.get("reachy_mini_import")]:
         strips.remove(strip)
+
+
+def _add_sound_strip(scene, filepath, frame_start):
+    """Drop the sidecar on a free sequencer channel at the move's start.
+
+    Strips added here are tagged so the next import can replace them
+    (see _remove_imported_strips).
+    """
+    se = scene.sequence_editor_create()
+    strips = se.strips if hasattr(se, "strips") else se.sequences
+    all_strips = (se.strips_all if hasattr(se, "strips_all")
+                  else se.sequences_all)
     channel = max((s.channel for s in all_strips), default=0) + 1
     strip = strips.new_sound(name=pathlib.Path(filepath).stem,
                              filepath=filepath, channel=channel,

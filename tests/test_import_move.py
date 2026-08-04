@@ -214,6 +214,19 @@ class AudioSidecarTest(unittest.TestCase):
         self.assertTrue(sounds[0].sound.filepath.startswith(
             os.path.dirname(path_b)))
 
+    def test_silent_move_clears_previous_import_strip(self):
+        """Importing a move with no audio must not keep the old sound."""
+        move = _synthetic_move(24.0, duration=1.0)
+        path_with = _write_move(move, with_audio=True)
+        path_silent = _write_move(move, with_audio=False)
+        import_move.apply(bpy.context, path_with, load_audio=True)
+        stats = import_move.apply(bpy.context, path_silent, load_audio=True)
+        self.assertIsNone(stats["audio"])
+        se = bpy.context.scene.sequence_editor
+        strips = (se.strips_all if hasattr(se, "strips_all")
+                  else se.sequences_all)
+        self.assertEqual(len([s for s in strips if s.type == "SOUND"]), 0)
+
     def test_hand_added_strips_survive_import(self):
         d = tempfile.mkdtemp(prefix="reachy_import_test_")
         wav = os.path.join(d, "song.wav")

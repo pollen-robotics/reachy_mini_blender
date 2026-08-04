@@ -230,6 +230,8 @@ def apply(context, filepath, mapping=None, load_audio=True):
 
     stats["audio"] = None
     if load_audio:
+        # A silent move must still clear the previous import's audio.
+        import_move._remove_imported_strips(scene)
         dense = pathlib.Path(filepath).with_name(stem + ".json")
         sidecar = import_move.find_audio_sidecar(str(dense))
         if sidecar:
