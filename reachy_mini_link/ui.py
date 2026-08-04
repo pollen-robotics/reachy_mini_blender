@@ -241,6 +241,8 @@ class ReachyMiniLinkProps(bpy.types.PropertyGroup):
                      "filenames are its slug"))
     out_dir: bpy.props.StringProperty(
         name="Folder", default="//moves/", subtype="DIR_PATH",
+        # Without this flag, Blender 4.5+ red-alerts any "//" value.
+        options={"PATH_SUPPORTS_BLEND_RELATIVE"},
         description=("Folder the move files are written into (created if "
                      "missing). The filename comes from the move's name"))
     use_scene_range: bpy.props.BoolProperty(
