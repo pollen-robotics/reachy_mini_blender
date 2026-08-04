@@ -241,7 +241,9 @@ where an animator would have put them — and the fitted free tangents let a
 single Bézier segment cover a whole arc, so a 12 s / 50 Hz capture lands
 around ~30 key columns instead of 600 samples. The result is a normal
 hand-editable animation: polish it in the Graph Editor, then play, export,
-or publish it like anything else.
+or publish it like anything else. The move's **Name** in the Share section
+is set to the imported file's, so a later export or publish keeps the same
+identity without retyping it.
 
 Keys land where an animator would put them: head pose on `Head.001`, body
 yaw and antennas on their sliders. An audio sidecar
@@ -311,13 +313,13 @@ account it found).
 
 ### Exporting a move
 
-Use the panel — **Description** and the frame range live in the "Timeline"
-section, **Output** and the buttons in "Share":
+Use the panel — the frame range lives in the "Timeline" section, the
+move's **Name**, the output **Folder** and the buttons in "Share":
 
 | Field | Meaning |
 |---|---|
-| **Description** | stored in the file's `description`; this is what identifies the move to the robot's move libraries, not the filename |
-| **Output** | a Blender path, so `//` means *relative to the .blend*. Missing directories are created |
+| **Name** | the move's one identity everywhere: stored in the file's `description` (what the robot's move libraries index), and its slug is the filename both locally and on the Hub |
+| **Folder** | where the files land — a Blender path, so `//` means *relative to the .blend*. Created if missing. A preview line shows exactly what one click will write (`<slug>.json`, plus `.wav` and `.keys.json` sidecars) |
 | **Use scene frame range** | on: use the scene's `frame_start`/`frame_end`. Off: exposes explicit **Start** / **End** fields for exporting a slice |
 
 Then click **Export Move**. The status bar reports the resolved absolute path and the
@@ -328,7 +330,7 @@ Two things it will refuse rather than write something broken:
 
 - A range of fewer than 2 frames. A single-frame or reversed range produces a file the
   robot's loader cannot play, so it errors instead.
-- A `//` output path while the .blend is **unsaved**. `//` has nothing to resolve against
+- A `//` output folder while the .blend is **unsaved**. `//` has nothing to resolve against
   before the first save, and the path would silently fall through to the process working
   directory. Save the .blend, or give an absolute path. The panel warns about this before
   you click.

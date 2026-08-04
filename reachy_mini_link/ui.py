@@ -235,11 +235,14 @@ class ReachyMiniLinkProps(bpy.types.PropertyGroup):
         description="Streaming rate in Hz. Takes effect on the next Start")
 
     description: bpy.props.StringProperty(
-        name="Description", default="untitled",
-        description="Description stored in the baked move file")
-    out_path: bpy.props.StringProperty(
-        name="Output", default="//moves/untitled.json", subtype="FILE_PATH",
-        description="Where to write the baked move JSON")
+        name="Name", default="untitled",
+        description=("The move's name across the ecosystem: stored in the "
+                     "file's description, and the exported/published "
+                     "filenames are its slug"))
+    out_dir: bpy.props.StringProperty(
+        name="Folder", default="//moves/", subtype="DIR_PATH",
+        description=("Folder the move files are written into (created if "
+                     "missing). The filename comes from the move's name"))
     use_scene_range: bpy.props.BoolProperty(
         name="Use scene frame range", default=True)
     frame_start: bpy.props.IntProperty(name="Start", default=1, min=0)
@@ -573,13 +576,18 @@ class REACHY_MINI_OT_export_move(bpy.types.Operator):
         scene = context.scene
         start = None if props.use_scene_range else props.frame_start
         end = None if props.use_scene_range else props.frame_end
+        # The filename is the move name's slug - one identity everywhere:
+        # the file's description, the local filenames, the Hub layout.
+        out_dir = props.out_dir or "//moves/"
+        out_path = (out_dir.rstrip("/\\") + "/"
+                    + f"{hub.slugify(props.description)}.json")
         try:
             move = bake.bake(
                 scene, mapping=_mapping(props),
                 description=props.description,
                 frame_start=start, frame_end=end,
             )
-            resolved_path = bake.write_move(props.out_path, move)
+            resolved_path = bake.write_move(out_path, move)
         except (rig.RigError, OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
@@ -605,8 +613,8 @@ class REACHY_MINI_OT_export_move(bpy.types.Operator):
                 self.report({"WARNING"},
                             f"Reachy Mini: keys sidecar not written ({exc})")
                 keys_bytes = None
-        # Report the resolved absolute path, not props.out_path's unresolved
-        # "//" form, so the artist is shown a path that actually exists.
+        # Report the resolved absolute path, not the unresolved "//" form,
+        # so the artist is shown a path that actually exists.
         extras = [s for s, present in (("audio", audio_bytes),
                                        ("keys", keys_bytes)) if present]
         with_extras = f" (+ {' & '.join(extras)} sidecar)" if extras else ""
@@ -663,12 +671,19 @@ on the rig, cleaned up for hand editing"""
         return {"RUNNING_MODAL"}
 
     def execute(self, context):
-        mapping = _mapping(context.scene.reachy_mini_link)
+        props = context.scene.reachy_mini_link
+        mapping = _mapping(props)
         keys_path = None
         if self.filepath.endswith(keyframed.SUFFIX):
             keys_path = self.filepath
         elif self.use_exact_keys:
             keys_path = keyframed.find_sidecar(self.filepath)
+        # On success the imported move becomes the one being worked on:
+        # a later export/publish keeps its name by default.
+        stem = pathlib.Path(self.filepath).name
+        move_name = (stem[:-len(keyframed.SUFFIX)]
+                     if stem.endswith(keyframed.SUFFIX)
+                     else pathlib.Path(stem).stem)
         if keys_path:
             try:
                 stats = keyframed.apply(context, keys_path, mapping=mapping,
@@ -677,6 +692,7 @@ on the rig, cleaned up for hand editing"""
                 self.report({"ERROR"}, f"Reachy Mini: {exc}")
                 return {"CANCELLED"}
             with_audio = " + audio" if stats["audio"] else ""
+            props.description = move_name
             self.report(
                 {"INFO"},
                 f"Restored exact keys: {stats['keys']} keys on "
@@ -692,6 +708,7 @@ on the rig, cleaned up for hand editing"""
         except (import_move.MoveFormatError, rig.RigError, OSError) as exc:
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
+        props.description = move_name
         if stats["samples"]:
             with_audio = " + audio" if stats["audio"] else ""
             self.report(
@@ -820,6 +837,9 @@ def _hub_move_downloaded():
                     detail = f"{name}: {stats['keys']} keys"
                 if stats["audio"]:
                     detail += " + audio"
+                # The imported move becomes the one being worked on:
+                # a later export/publish keeps its name by default.
+                bpy.context.scene.reachy_mini_link.description = name
                 dl.update(status="done", detail=detail)
             except (import_move.MoveFormatError, keyframed.KeysFormatError,
                     rig.RigError, OSError) as exc:
@@ -951,11 +971,10 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             sub.operator("reachy_mini.send_test_pose", icon="OUTLINER_OB_ARMATURE")
             row.operator("reachy_mini.reset_rig", icon="LOOP_BACK")
 
-        # ── Timeline: what the move is, and playing it on the robot ────
+        # ── Timeline: the frame range, and playing it on the robot ─────
         box = layout.box()
         box.label(text="Timeline", icon="SEQUENCE")
         col = box.column(align=True)
-        col.prop(props, "description")
         col.prop(props, "use_scene_range")
         if not props.use_scene_range:
             row = col.row(align=True)
@@ -1014,14 +1033,21 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             elif dl["status"] == "error":
                 box.label(text=f"Import failed: {dl['detail']}", icon="ERROR")
 
-        # ── Share: export to disk, publish to the Hub ───────────────────
+        # ── Share: name the move, export to disk, publish to the Hub ───
         box = layout.box()
         box.label(text="Share", icon="EXPORT")
         col = box.column(align=True)
-        col.prop(props, "out_path")
-        if not bpy.data.filepath and props.out_path.startswith("//"):
+        col.prop(props, "description")
+        col.prop(props, "out_dir")
+        if not bpy.data.filepath and props.out_dir.startswith("//"):
             col.label(text="Save the .blend first, or use an absolute path",
                       icon="ERROR")
+        else:
+            # What one click will write, before clicking it.
+            slug = hub.slugify(props.description)
+            extras = (" + audio + keys"
+                      if audio.scene_has_audio(context.scene) else " + keys")
+            col.label(text=f"{slug}.json{extras}", icon="BLANK1")
 
         box.separator(factor=0.5)
 
