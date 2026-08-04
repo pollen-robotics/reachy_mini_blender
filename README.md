@@ -231,12 +231,17 @@ export motion-only.
 `RecordedMove` JSON — recorded with
 [Marionette](https://huggingface.co/spaces/RemiFabre/marionette), downloaded
 from a community dataset on the Hub, or exported by this add-on — becomes
-editable keyframes on the rig. Raw captures are 30–100 Hz and noisy, so each
-channel is cleaned on the way in: a light low-pass takes out capture jitter,
-then the curve is simplified down to the keys that actually shape the motion
-(a 20 s puppeteered take typically lands at a few dozen keys per channel
-instead of ~600). The result is a normal hand-editable animation: polish it
-in the Graph Editor, then play, export, or publish it like anything else.
+editable keyframes on the rig. Raw captures are 30–100 Hz and noisy, so they
+are cleaned on the way in: a light low-pass takes out capture jitter, then
+one set of key times is chosen for the whole pose (Salient-Poses-style
+greedy selection against free-tangent Bézier reconstruction), and each
+channel keeps only the key columns its own motion needs. Keys line up in
+columns across channels at the points where the motion actually turns —
+where an animator would have put them — and the fitted free tangents let a
+single Bézier segment cover a whole arc, so a 12 s / 50 Hz capture lands
+around ~30 key columns instead of 600 samples. The result is a normal
+hand-editable animation: polish it in the Graph Editor, then play, export,
+or publish it like anything else.
 
 Keys land where an animator would put them: head pose on `Head.001`, body
 yaw and antennas on their sliders. An audio sidecar

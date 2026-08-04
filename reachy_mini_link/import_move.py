@@ -23,11 +23,15 @@ Where the keys land, and why:
                     The tail bones are reset to zero to keep the sum honest.
 
 Raw captures are ~30-100 Hz with sensor noise: unusable as keyframes as-is.
-Each channel goes through motionclean (Gaussian low-pass, then RDP
-simplification), so what lands in the Graph Editor is the handful of keys
-that actually shape the motion. Timestamps in real recordings are not
-uniform (Marionette captures whenever its loop gets CPU), so everything
-works off the file's own time array.
+Each channel is low-passed (motionclean.gaussian_smooth), then one set of
+key times is chosen for the whole pose with motionclean.salient_select -
+Salient-Poses-style: keys land where the motion actually turns, aligned in
+columns across channels, exactly where an animator would put them. Handles
+are least-squares-fitted free tangents, so a single Bézier segment can hug
+a whole arc; what lands in the Graph Editor is a few dozen keys, not
+hundreds. Timestamps in real recordings are not uniform (Marionette
+captures whenever its loop gets CPU), so everything works off the file's
+own time array.
 """
 
 import bisect
@@ -272,13 +276,39 @@ def apply(context, filepath, mapping=None, smooth_sigma=0.02, tolerance=1.0,
                        if f.data_path == path and f.array_index == index]:
                 cb.fcurves.remove(fc)
 
+        cleaned = []
         for data_path, index, values, eps, angular, value_scale in channels:
             vals = motionclean.unwrap(values) if angular else values
-            vals = motionclean.gaussian_smooth(times, vals, smooth_sigma)
-            samples = [(frame0 + t * fps, v * value_scale)
-                       for t, v in zip(times, vals)]
+            cleaned.append(motionclean.gaussian_smooth(
+                times, vals, smooth_sigma))
+
+        frame_axis = [frame0 + t * fps for t in times]
+
+        # One set of key *columns* for the whole pose (Salient-Poses-
+        # style): every channel is normalised by its own tolerance so
+        # the selection weighs a millimetre of head travel like a third
+        # of a degree of antenna. Each channel then keeps only the
+        # columns its own reconstruction needs (subset_select), so keys
+        # line up across channels without a still antenna paying for
+        # the head's keys.
+        columns = None
+        if tolerance > 0.0:
+            norm = [[v / ch[3] for v in vals]
+                    for ch, vals in zip(channels, cleaned)
+                    if max(vals) - min(vals) > ch[3]]
+            columns = motionclean.salient_select(frame_axis, norm)
+
+        for i, (data_path, index, _values, eps, _angular,
+                value_scale) in enumerate(channels):
+            samples = [(f, v * value_scale)
+                       for f, v in zip(frame_axis, cleaned[i])]
+            idx = None
+            if columns is not None:
+                idx = motionclean.subset_select(
+                    frame_axis, cleaned[i], columns, eps)
             fc = _solve_channel(cb, data_path, index, samples,
-                                eps * abs(value_scale), snap_to_frames)
+                                eps * abs(value_scale), snap_to_frames,
+                                key_idx=idx)
             stats["keys"] += len(fc.keyframe_points)
 
         _zero_free_antenna_bones(arm_obj, m)
@@ -296,12 +326,15 @@ def apply(context, filepath, mapping=None, smooth_sigma=0.02, tolerance=1.0,
     return stats
 
 
-def _solve_channel(cb, data_path, index, samples, eps, snap):
+def _solve_channel(cb, data_path, index, samples, eps, snap, key_idx=None):
     """Write one channel's fcurve, keeping the fewest keys within `eps`.
 
-    RDP picks the initial key set, but RDP's guarantee is for *linear*
-    interpolation and Blender draws auto-clamped Beziers between keys,
-    which drift from the chord on sparse keys. So the bound is enforced
+    `key_idx` is the pose-level key set from motionclean.salient_select
+    (None falls back to per-channel RDP). Handles are least-squares
+    free tangents fitted to the recorded samples of each segment.
+
+    The selection measured error against its own Bézier model, and
+    snapping moves keys to whole frames, so the bound is re-enforced
     against the real thing: evaluate the actual fcurve at every recorded
     sample and re-insert the worst offender until the curve is within
     eps everywhere it still can be.
@@ -323,14 +356,16 @@ def _solve_channel(cb, data_path, index, samples, eps, snap):
         f = float(round(frames[i]))
         return f, _value_at(frames, values, f)
 
-    keep = (motionclean.rdp(frames, values, eps) if eps > 0.0
-            else range(len(samples)))
+    if key_idx is None:
+        key_idx = (motionclean.rdp(frames, values, eps) if eps > 0.0
+                   else range(len(samples)))
     keyed = {}
-    for i in keep:
+    for i in key_idx:
         f, v = key_for(i)
         keyed[f] = v
 
-    fc = _write_fcurve(cb, data_path, index, sorted(keyed.items()))
+    fit_to = (frames, values) if eps > 0.0 else None
+    fc = _write_fcurve(cb, data_path, index, sorted(keyed.items()), fit_to)
     if eps <= 0.0:
         return fc
 
@@ -345,7 +380,8 @@ def _solve_channel(cb, data_path, index, samples, eps, snap):
             fixable.discard(worst_i)
             continue
         keyed[f] = v
-        fc = _write_fcurve(cb, data_path, index, sorted(keyed.items()))
+        fc = _write_fcurve(cb, data_path, index, sorted(keyed.items()),
+                           fit_to)
     return fc
 
 
@@ -388,21 +424,52 @@ def _ensure_channelbag(arm_obj, action_name):
     return strip.channelbag(slot, ensure=True)
 
 
-def _write_fcurve(cb, data_path, index, keys):
-    """Replace the fcurve at (data_path, index) with the given keys."""
+def _write_fcurve(cb, data_path, index, keys, fit_to=None):
+    """Replace the fcurve at (data_path, index) with the given keys.
+
+    With `fit_to` = (sample_frames, sample_values), each segment's
+    handles become free tangents least-squares-fitted to the recorded
+    samples it spans (handle x at the thirds, so the fitted cubic is
+    exactly what Blender evaluates). Without it, auto-clamped handles.
+    """
     for fc in [f for f in cb.fcurves
                if f.data_path == data_path and f.array_index == index]:
         cb.fcurves.remove(fc)
     fc = cb.fcurves.new(data_path, index=index)
     if keys:
         fc.keyframe_points.add(len(keys))
+        handle_type = "FREE" if fit_to and len(keys) > 1 else "AUTO_CLAMPED"
         for kp, (frame, value) in zip(fc.keyframe_points, keys):
             kp.co = (frame, value)
             kp.interpolation = "BEZIER"
-            kp.handle_left_type = "AUTO_CLAMPED"
-            kp.handle_right_type = "AUTO_CLAMPED"
+            kp.handle_left_type = handle_type
+            kp.handle_right_type = handle_type
+        if handle_type == "FREE":
+            _fit_handles(fc, *fit_to)
     fc.update()
     return fc
+
+
+def _fit_handles(fc, sample_frames, sample_values):
+    """Free-tangent handles for every segment, fitted to the samples."""
+    kps = fc.keyframe_points
+    for j in range(len(kps) - 1):
+        x0, y0 = kps[j].co
+        x1, y1 = kps[j + 1].co
+        lo = bisect.bisect_right(sample_frames, x0)
+        hi = bisect.bisect_left(sample_frames, x1)
+        c1, c2 = motionclean.fit_bezier(sample_frames, sample_values,
+                                        lo, hi, (x0, y0, x1, y1))
+        third = (x1 - x0) / 3.0
+        kps[j].handle_right = (x0 + third, c1)
+        kps[j + 1].handle_left = (x1 - third, c2)
+    # The outer handles never shape the curve; mirror them so they sit
+    # tidily instead of at Blender's (co, co) default.
+    first, last = kps[0], kps[-1]
+    first.handle_left = (2.0 * first.co[0] - first.handle_right[0],
+                         2.0 * first.co[1] - first.handle_right[1])
+    last.handle_right = (2.0 * last.co[0] - last.handle_left[0],
+                         2.0 * last.co[1] - last.handle_left[1])
 
 
 def _add_sound_strip(scene, filepath, frame_start):
