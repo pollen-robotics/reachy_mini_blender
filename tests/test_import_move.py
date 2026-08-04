@@ -200,6 +200,35 @@ class AudioSidecarTest(unittest.TestCase):
                   else se.sequences_all)
         self.assertEqual(len([s for s in strips if s.type == "SOUND"]), 1)
 
+    def test_reimport_replaces_previous_import_strip(self):
+        move = _synthetic_move(24.0, duration=1.0)
+        path_a = _write_move(move, with_audio=True)
+        path_b = _write_move(move, with_audio=True)
+        import_move.apply(bpy.context, path_a, load_audio=True)
+        import_move.apply(bpy.context, path_b, load_audio=True)
+        se = bpy.context.scene.sequence_editor
+        strips = (se.strips_all if hasattr(se, "strips_all")
+                  else se.sequences_all)
+        sounds = [s for s in strips if s.type == "SOUND"]
+        self.assertEqual(len(sounds), 1)
+        self.assertTrue(sounds[0].sound.filepath.startswith(
+            os.path.dirname(path_b)))
+
+    def test_hand_added_strips_survive_import(self):
+        d = tempfile.mkdtemp(prefix="reachy_import_test_")
+        wav = os.path.join(d, "song.wav")
+        _write_silent_wav(wav)
+        scene = bpy.context.scene
+        se = scene.sequence_editor_create()
+        strips = se.strips if hasattr(se, "strips") else se.sequences
+        strips.new_sound(name="song", filepath=wav, channel=1, frame_start=1)
+        path = _write_move(_synthetic_move(24.0, 1.0), with_audio=True)
+        import_move.apply(bpy.context, path, load_audio=True)
+        all_strips = (se.strips_all if hasattr(se, "strips_all")
+                      else se.sequences_all)
+        names = sorted(s.name for s in all_strips if s.type == "SOUND")
+        self.assertEqual(names, ["move", "song"])
+
     def test_audio_only_move(self):
         move = {"description": "just sound", "time": [0.0],
                 "audio_only": True}

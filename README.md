@@ -253,6 +253,25 @@ The file-browser sidebar has the knobs:
 | **Load Audio** | add the sidecar as a sequencer strip |
 | **Set Scene Range** | fit the scene frame range to the move |
 
+### Importing straight from the Hub
+
+**From Hub** (next to Import Move) lists every public community move in one
+place — Marionette recordings, the official
+[emotions](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library)
+and dances libraries, and moves published by this add-on (anything in a
+dataset tagged `reachy_mini_community_moves`). Pick one in the list — the
+search box filters by move name, author or dataset, the note icon marks
+moves that ship audio — and **Import Selected** downloads it and runs the
+same import/cleanup pipeline as a local file. No sign-in needed; a token is
+used only if one is already around (it also lets your own private datasets
+show up).
+
+Downloads are cached per user (`~/Library/Caches/reachy_mini_link` on
+macOS, `~/.cache/reachy_mini_link` on Linux, `%LOCALAPPDATA%` on Windows)
+so the sound strip still resolves after a restart. Re-importing a move
+replaces the audio strip a previous import created; strips you added by
+hand are never touched.
+
 ### Publishing to the Hub
 
 **Publish to Hub** (next to Export Move) bakes the timeline and pushes it to a

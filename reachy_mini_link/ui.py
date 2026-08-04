@@ -9,7 +9,8 @@ import webbrowser
 
 import bpy
 
-from . import audio, bake, discover, hub, import_move, play, rig, sync
+from . import (audio, bake, discover, hub, hub_import, import_move, play,
+               rig, sync)
 
 # The rigged model ships inside the add-on so installing the zip is the
 # whole setup - no separate .blend download.
@@ -648,6 +649,115 @@ on the rig, cleaned up for hand editing"""
         return {"FINISHED"}
 
 
+class ReachyHubMoveItem(bpy.types.PropertyGroup):
+    """One row of the Hub move browser. `name` doubles as the display
+    label and what the list's search box filters on."""
+
+    repo_id: bpy.props.StringProperty()
+    path: bpy.props.StringProperty()
+    audio_path: bpy.props.StringProperty()
+
+
+class REACHY_MINI_UL_hub_moves(bpy.types.UIList):
+    def draw_item(self, _context, layout, _data, item, _icon,
+                  _active_data, _active_prop):
+        layout.label(text=item.name,
+                     icon="SOUND" if item.audio_path else "BLANK1")
+
+
+def _hub_moves_ready():
+    """Worker callback: mirror the fetched list into the window manager.
+
+    Collection properties are bpy data, so the copy happens on the main
+    thread via a one-shot timer. WindowManager (not Scene) on purpose:
+    the browser is a transient view of the Hub, not something to save
+    into the .blend.
+    """
+    def fill():
+        wm = bpy.context.window_manager
+        wm.reachy_hub_moves.clear()
+        for mv in hub_import.state["moves"]:
+            item = wm.reachy_hub_moves.add()
+            item.name = mv["label"]
+            item.repo_id = mv["repo_id"]
+            item.path = mv["path"]
+            item.audio_path = mv["audio_path"] or ""
+        wm.reachy_hub_moves_index = 0
+        return None
+
+    bpy.app.timers.register(fill, first_interval=0.0)
+    _redraw_later()
+
+
+def _hub_move_downloaded():
+    """Worker callback: run the bpy half of a Hub import on a timer."""
+    def finish():
+        dl = hub_import.download
+        if dl["status"] == "fetched":
+            json_path = dl["files"][0]
+            try:
+                stats = import_move.apply(bpy.context, json_path)
+                with_audio = " + audio" if stats["audio"] else ""
+                name = pathlib.Path(json_path).stem
+                dl.update(status="done",
+                          detail=f"{name}: {stats['keys']} keys{with_audio}")
+            except (import_move.MoveFormatError, rig.RigError,
+                    OSError) as exc:
+                dl.update(status="error", detail=str(exc))
+        return None
+
+    bpy.app.timers.register(finish, first_interval=0.0)
+    _redraw_later()
+
+
+class REACHY_MINI_OT_hub_browse_moves(bpy.types.Operator):
+    """List every community move on the Hugging Face Hub
+(Marionette recordings, official libraries, published moves)"""
+
+    bl_idname = "reachy_mini.hub_browse_moves"
+    bl_label = "From Hub"
+
+    def execute(self, context):
+        hub_import.list_moves_async(prefs_token=_hf_prefs_token(context),
+                                    on_done=_hub_moves_ready)
+        return {"FINISHED"}
+
+
+class REACHY_MINI_OT_hub_import_selected(bpy.types.Operator):
+    """Download the selected move and import it as keyframes"""
+
+    bl_idname = "reachy_mini.hub_import_selected"
+    bl_label = "Import Selected"
+
+    def execute(self, context):
+        wm = context.window_manager
+        index = wm.reachy_hub_moves_index
+        if not (0 <= index < len(wm.reachy_hub_moves)):
+            self.report({"ERROR"}, "Reachy Mini: no move selected")
+            return {"CANCELLED"}
+        item = wm.reachy_hub_moves[index]
+        hub_import.download_move_async(
+            {"repo_id": item.repo_id, "path": item.path,
+             "audio_path": item.audio_path or None,
+             "name": pathlib.PurePosixPath(item.path).stem},
+            prefs_token=_hf_prefs_token(context),
+            on_done=_hub_move_downloaded)
+        return {"FINISHED"}
+
+
+class REACHY_MINI_OT_hub_browse_close(bpy.types.Operator):
+    """Hide the Hub move list"""
+
+    bl_idname = "reachy_mini.hub_browse_close"
+    bl_label = "Close"
+
+    def execute(self, context):
+        context.window_manager.reachy_hub_moves.clear()
+        hub_import.state.update(status="idle", detail=None, moves=[])
+        hub_import.download.update(status="idle", detail=None, files=None)
+        return {"FINISHED"}
+
+
 class REACHY_MINI_PT_link(bpy.types.Panel):
     bl_label = "Reachy Mini"
     bl_idname = "REACHY_MINI_PT_link"
@@ -747,7 +857,34 @@ class REACHY_MINI_PT_link(bpy.types.Panel):
             elif pl["status"] == "error":
                 box.label(text=f"Play failed: {pl['detail']}", icon="ERROR")
 
-        box.operator("reachy_mini.import_move", icon="IMPORT")
+        row = box.row(align=True)
+        row.operator("reachy_mini.import_move", icon="IMPORT")
+        row.operator("reachy_mini.hub_browse_moves", icon="URL")
+
+        hst = hub_import.state
+        wm = context.window_manager
+        if hst["status"] == "working":
+            box.label(text="Browsing community moves…", icon="TIME")
+        elif hst["status"] == "error":
+            box.label(text=f"Browse failed: {hst['detail']}", icon="ERROR")
+        elif len(wm.reachy_hub_moves):
+            box.template_list("REACHY_MINI_UL_hub_moves", "",
+                              wm, "reachy_hub_moves",
+                              wm, "reachy_hub_moves_index", rows=6)
+            dl = hub_import.download
+            row = box.row(align=True)
+            sub = row.row(align=True)
+            sub.enabled = dl["status"] != "working"
+            sub.operator("reachy_mini.hub_import_selected", icon="IMPORT")
+            row.operator("reachy_mini.hub_browse_moves", text="",
+                         icon="FILE_REFRESH")
+            row.operator("reachy_mini.hub_browse_close", text="", icon="X")
+            if dl["status"] == "working":
+                box.label(text=f"Downloading {dl['detail']}…", icon="TIME")
+            elif dl["status"] == "done":
+                box.label(text=f"Imported {dl['detail']}", icon="CHECKMARK")
+            elif dl["status"] == "error":
+                box.label(text=f"Import failed: {dl['detail']}", icon="ERROR")
 
         # ── Share: export to disk, publish to the Hub ───────────────────
         box = layout.box()
@@ -826,6 +963,11 @@ _classes = (
     REACHY_MINI_OT_stop_robot_play,
     REACHY_MINI_OT_export_move,
     REACHY_MINI_OT_import_move,
+    ReachyHubMoveItem,
+    REACHY_MINI_UL_hub_moves,
+    REACHY_MINI_OT_hub_browse_moves,
+    REACHY_MINI_OT_hub_import_selected,
+    REACHY_MINI_OT_hub_browse_close,
     REACHY_MINI_PT_link,
 )
 
@@ -835,6 +977,12 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.Scene.reachy_mini_link = bpy.props.PointerProperty(
         type=ReachyMiniLinkProps)
+    # WindowManager, not Scene: the Hub browser list is runtime-only
+    # and must not be serialized into shared .blends.
+    bpy.types.WindowManager.reachy_hub_moves = bpy.props.CollectionProperty(
+        type=ReachyHubMoveItem)
+    bpy.types.WindowManager.reachy_hub_moves_index = bpy.props.IntProperty(
+        default=0)
 
     # Resolve HF sign-in once at startup so the panel is populated
     # without a click. Deferred to a timer: register() runs in a
@@ -855,5 +1003,8 @@ def unregister():
     sync.stop()
     if hasattr(bpy.types.Scene, "reachy_mini_link"):
         del bpy.types.Scene.reachy_mini_link
+    for attr in ("reachy_hub_moves", "reachy_hub_moves_index"):
+        if hasattr(bpy.types.WindowManager, attr):
+            delattr(bpy.types.WindowManager, attr)
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

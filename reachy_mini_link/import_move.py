@@ -406,12 +406,22 @@ def _write_fcurve(cb, data_path, index, keys):
 
 
 def _add_sound_strip(scene, filepath, frame_start):
-    """Drop the sidecar on a free sequencer channel at the move's start."""
+    """Drop the sidecar on a free sequencer channel at the move's start.
+
+    Strips added here are tagged, and a later import removes the tagged
+    ones first: imported motion replaces the previous move's fcurves, so
+    its audio replaces the previous sidecar too instead of stacking
+    into a chorus. Strips the user added by hand are left alone.
+    """
     se = scene.sequence_editor_create()
     # Blender 5 renamed SequenceEditor.sequences to strips.
     strips = se.strips if hasattr(se, "strips") else se.sequences
     all_strips = (se.strips_all if hasattr(se, "strips_all")
                   else se.sequences_all)
+    for strip in [s for s in all_strips if s.get("reachy_mini_import")]:
+        strips.remove(strip)
     channel = max((s.channel for s in all_strips), default=0) + 1
-    strips.new_sound(name=pathlib.Path(filepath).stem, filepath=filepath,
-                     channel=channel, frame_start=int(frame_start))
+    strip = strips.new_sound(name=pathlib.Path(filepath).stem,
+                             filepath=filepath, channel=channel,
+                             frame_start=int(frame_start))
+    strip["reachy_mini_import"] = True
