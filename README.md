@@ -239,7 +239,7 @@ instead of ~600). The result is a normal hand-editable animation: polish it
 in the Graph Editor, then play, export, or publish it like anything else.
 
 Keys land where an animator would put them: head pose on `Head.001`, body
-yaw on its slider, antennas on the FK antenna bones. An audio sidecar
+yaw and antennas on their sliders. An audio sidecar
 (`.wav` or `.ogg` next to the JSON) is added as a sequencer strip so the
 sound survives the trip too.
 

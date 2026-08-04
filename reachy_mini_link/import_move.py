@@ -15,9 +15,12 @@ Where the keys land, and why:
                     dead. The driver's linear coefficient is read from its
                     expression at import time (nothing hardcoded); a rig
                     without that driver gets keys on the yaw bone directly.
-  - antennas        on the last bone of each chain (Antenna.*.003) - the
-                    free FK bone. The .002 bones are slider-driven, so their
-                    sliders are reset to zero to keep the sum honest.
+  - antennas        on each chain's base bone (Antenna.*.002, through its
+                    slider, same driver inversion as yaw). The base is the
+                    robot's actual hinge: keying the free tail bone instead
+                    would rotate only the distal segment - the antenna
+                    visually bends where the bones meet instead of sweeping.
+                    The tail bones are reset to zero to keep the sum honest.
 
 Raw captures are ~30-100 Hz with sensor noise: unusable as keyframes as-is.
 Each channel goes through motionclean (Gaussian low-pass, then RDP
@@ -86,18 +89,19 @@ def find_audio_sidecar(json_path):
     return None
 
 
-def _yaw_write_target(arm_obj, m):
-    """(data_path, index, value_scale) for body-yaw keys.
+def _driven_write_target(arm_obj, bone, axis):
+    """(data_path, index, value_scale) for keys targeting a driven channel.
 
-    If the yaw bone's rotation channel is driven by a slider through a
-    linear expression, keys must go on the slider (keys under a driver are
-    never evaluated) with values divided by the driver's coefficient.
+    If the bone's rotation channel is driven by a slider through a linear
+    expression, keys must go on the slider (keys under a driver are never
+    evaluated) with values divided by the driver's coefficient. Without a
+    driver, keys go on the bone channel itself.
     """
-    driven_path = f'pose.bones["{m.body_yaw_bone}"].rotation_euler'
+    driven_path = f'pose.bones["{bone}"].rotation_euler'
     ad = arm_obj.animation_data
     if ad is not None:
         for d in ad.drivers:
-            if d.data_path != driven_path or d.array_index != m.body_yaw_axis:
+            if d.data_path != driven_path or d.array_index != axis:
                 continue
             drv = d.driver
             match = (_LINEAR_EXPR.match(drv.expression)
@@ -108,39 +112,33 @@ def _yaw_write_target(arm_obj, m):
                 and drv.variables[0].targets[0].transform_type.startswith("LOC_"))
             if not transform_ok:
                 raise rig.RigError(
-                    f"{driven_path}[{m.body_yaw_axis}] has a driver this "
-                    "importer cannot invert (expected 'var * <k>' on a "
-                    "slider location)")
+                    f"{driven_path}[{axis}] has a driver this importer "
+                    "cannot invert (expected 'var * <k>' on a slider "
+                    "location)")
             k = float(match.group(1) or match.group(2))
             if k == 0.0:
-                raise rig.RigError("body yaw driver has a zero coefficient")
+                raise rig.RigError(
+                    f"driver on {driven_path}[{axis}] has a zero coefficient")
             tgt = drv.variables[0].targets[0]
-            axis = {"LOC_X": 0, "LOC_Y": 1, "LOC_Z": 2}[tgt.transform_type]
-            return (f'pose.bones["{tgt.bone_target}"].location', axis, 1.0 / k)
-    return (driven_path, m.body_yaw_axis, 1.0)
+            loc_axis = {"LOC_X": 0, "LOC_Y": 1, "LOC_Z": 2}[tgt.transform_type]
+            return (f'pose.bones["{tgt.bone_target}"].location', loc_axis,
+                    1.0 / k)
+    return (driven_path, axis, 1.0)
 
 
-def _zero_antenna_sliders(arm_obj, m):
-    """Reset the sliders driving the .002 antenna bones to their rest spot.
+def _zero_free_antenna_bones(arm_obj, m):
+    """Reset the FK tail bones of each antenna chain to zero rotation.
 
-    Imported antenna keys live on the free .003 bones; a leftover slider
-    pose would silently offset every antenna angle rig.read() reports.
+    Imported antenna keys drive the base bone (chain[0], through its
+    slider); rig.read() sums the whole chain, so a leftover pose on the
+    free .003 bones would silently offset every antenna angle - and
+    visually kink the antenna where the two bones meet.
     """
-    ad = arm_obj.animation_data
-    if ad is None:
-        return
-    driven = {f'pose.bones["{chain[i]}"].rotation_euler'
-              for chain in (m.antenna_r_bones, m.antenna_l_bones)
-              for i in range(len(chain) - 1)}
-    for d in ad.drivers:
-        if d.data_path not in driven:
-            continue
-        for var in d.driver.variables:
-            tgt = var.targets[0]
-            slider = arm_obj.pose.bones.get(tgt.bone_target or "")
-            if slider is not None and tgt.transform_type.startswith("LOC_"):
-                slider.location[{"LOC_X": 0, "LOC_Y": 1,
-                                 "LOC_Z": 2}[tgt.transform_type]] = 0.0
+    for chain in (m.antenna_r_bones, m.antenna_l_bones):
+        for name in chain[1:]:
+            pb = arm_obj.pose.bones.get(name)
+            if pb is not None:
+                pb.rotation_euler[m.antenna_axis] = 0.0
 
 
 def _head_channels(arm_obj, m, frames):
@@ -229,7 +227,16 @@ def apply(context, filepath, mapping=None, smooth_sigma=0.02, tolerance=1.0,
         eps_rot = _EPS_RADIANS * tolerance
 
         loc, eul = _head_channels(arm_obj, m, frames)
-        yaw_path, yaw_index, yaw_scale = _yaw_write_target(arm_obj, m)
+        yaw_target = _driven_write_target(arm_obj, m.body_yaw_bone,
+                                          m.body_yaw_axis)
+        # Antennas go on the base bone of each chain (through its slider):
+        # that is the robot's actual hinge, so the whole antenna sweeps.
+        # Keys on the free tail bone would only rotate the distal part -
+        # a visual kink instead of a rotation.
+        ant_r_target = _driven_write_target(arm_obj, m.antenna_r_bones[0],
+                                            m.antenna_axis)
+        ant_l_target = _driven_write_target(arm_obj, m.antenna_l_bones[0],
+                                            m.antenna_axis)
         yaw = [m.body_yaw_sign * float(f.get("body_yaw", 0.0)) for f in frames]
         # File order is [right, left]; see bake.py / RigState.antennas.
         ant_r = [m.antenna_r_sign * float(f["antennas"][0]) for f in frames]
@@ -242,15 +249,29 @@ def apply(context, filepath, mapping=None, smooth_sigma=0.02, tolerance=1.0,
                              loc[i], eps_loc, False, 1.0))
             channels.append((f"{head_path}.rotation_euler", i,
                              eul[i], eps_rot, True, 1.0))
-        channels.append((yaw_path, yaw_index, yaw, eps_rot, True, yaw_scale))
-        channels.append((
-            f'pose.bones["{m.antenna_r_bones[-1]}"].rotation_euler',
-            m.antenna_axis, ant_r, eps_rot, True, 1.0))
-        channels.append((
-            f'pose.bones["{m.antenna_l_bones[-1]}"].rotation_euler',
-            m.antenna_axis, ant_l, eps_rot, True, 1.0))
+        channels.append((*yaw_target[:2], yaw, eps_rot, True, yaw_target[2]))
+        channels.append((*ant_r_target[:2], ant_r, eps_rot, True,
+                         ant_r_target[2]))
+        channels.append((*ant_l_target[:2], ant_l, eps_rot, True,
+                         ant_l_target[2]))
 
         cb = _ensure_channelbag(arm_obj, pathlib.Path(filepath).stem)
+
+        # A DOF can be keyed through several rig elements (a slider, the
+        # driven bone, a chain's tail bone). This import writes exactly
+        # one of them per DOF, so stale fcurves on the alternates (an
+        # older import, hand keys) must go too - rig.read() sums chains,
+        # and leftovers would double-drive the robot.
+        stale = [(f'pose.bones["{m.body_yaw_bone}"].rotation_euler',
+                  m.body_yaw_axis)]
+        for chain in (m.antenna_r_bones, m.antenna_l_bones):
+            stale += [(f'pose.bones["{name}"].rotation_euler',
+                       m.antenna_axis) for name in chain]
+        for path, index in stale:
+            for fc in [f for f in cb.fcurves
+                       if f.data_path == path and f.array_index == index]:
+                cb.fcurves.remove(fc)
+
         for data_path, index, values, eps, angular, value_scale in channels:
             vals = motionclean.unwrap(values) if angular else values
             vals = motionclean.gaussian_smooth(times, vals, smooth_sigma)
@@ -260,7 +281,7 @@ def apply(context, filepath, mapping=None, smooth_sigma=0.02, tolerance=1.0,
                                 eps * abs(value_scale), snap_to_frames)
             stats["keys"] += len(fc.keyframe_points)
 
-        _zero_antenna_sliders(arm_obj, m)
+        _zero_free_antenna_bones(arm_obj, m)
 
         if set_scene_range:
             scene.frame_end = max(

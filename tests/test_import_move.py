@@ -66,8 +66,11 @@ def _write_silent_wav(path, seconds=1.0, rate=16000):
 
 def _clear_animation():
     arm = bpy.data.objects["Armature"]
+    # Detach the action but keep animation_data alive: the rig's slider
+    # drivers live there, and animation_data_clear() would delete them
+    # with it (silently changing where import keys land).
     if arm.animation_data:
-        arm.animation_data_clear()
+        arm.animation_data.action = None
     for pb in arm.pose.bones:
         pb.location = (0.0, 0.0, 0.0)
         pb.rotation_euler = (0.0, 0.0, 0.0)
@@ -98,6 +101,21 @@ class RoundtripTest(unittest.TestCase):
         n = len(self.move["time"])
         self.assertEqual(self.stats["samples"], n)
         self.assertEqual(self.stats["keys"], 9 * n)
+
+    def test_keys_land_on_sliders_not_fk_tails(self):
+        # Yaw and antennas must be keyed through the sliders driving the
+        # base bones. Keys on the free tail bones (.003) would visually
+        # bend the antenna at the bone joint instead of sweeping the
+        # whole antenna around the robot's hinge.
+        arm = bpy.data.objects["Armature"]
+        ad = arm.animation_data
+        cb = ad.action.layers[0].strips[0].channelbag(ad.action_slot)
+        paths = {fc.data_path for fc in cb.fcurves}
+        for slider in ("Slider.Rot.Core", "Slider.Rot.Antenna.L",
+                       "Slider.Rot.Antenna.R"):
+            self.assertIn(f'pose.bones["{slider}"].location', paths)
+        for tail in ("Antenna.L.003", "Antenna.R.003", "Core"):
+            self.assertNotIn(f'pose.bones["{tail}"].rotation_euler', paths)
 
     def test_rig_read_matches_input(self):
         scene = bpy.context.scene
