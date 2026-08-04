@@ -9,8 +9,8 @@ import webbrowser
 
 import bpy
 
-from . import (audio, bake, discover, hub, hub_import, import_move, play,
-               rig, sync)
+from . import (audio, bake, discover, hub, hub_import, import_move,
+               keyframed, play, rig, sync)
 
 # The rigged model ships inside the add-on so installing the zip is the
 # whole setup - no separate .blend download.
@@ -167,6 +167,7 @@ class REACHY_MINI_OT_publish_move(bpy.types.Operator):
             self.report({"ERROR"}, f"Reachy Mini: {exc}")
             return {"CANCELLED"}
         audio_bytes = _bake_audio(self, context.scene, start, end)
+        keys_bytes = _collect_keys(self, context)
 
         prefs = context.preferences.addons[__package__].preferences
         hub.publish_move_async(
@@ -174,6 +175,7 @@ class REACHY_MINI_OT_publish_move(bpy.types.Operator):
             dataset_name=prefs.dataset_name or hub.DATASET_DEFAULT,
             prefs_token=prefs.hf_token,
             audio=audio_bytes,
+            keys=keys_bytes,
             on_done=_redraw_later,
         )
         self.report({"INFO"}, "Publishing to the Hub…")
@@ -271,6 +273,23 @@ def _bake_audio(operator, scene, start, end):
                         f"Reachy Mini: audio mixdown failed ({exc}); "
                         "continuing without sound")
         return None
+
+
+def _collect_keys(operator, context):
+    """Serialized keyframed sidecar for the current move, or None.
+
+    None is normal (animation driven by NLA or constraints rather than
+    move-channel fcurves); a rig mismatch degrades to dense-only with a
+    warning rather than blocking the export.
+    """
+    try:
+        data = keyframed.collect(
+            context, mapping=_mapping(context.scene.reachy_mini_link))
+    except rig.RigError as exc:
+        operator.report({"WARNING"},
+                        f"Reachy Mini: keys sidecar skipped ({exc})")
+        return None
+    return keyframed.dumps(data).encode() if data else None
 
 
 def _settings(props):
@@ -575,12 +594,25 @@ class REACHY_MINI_OT_export_move(bpy.types.Operator):
             except OSError as exc:
                 self.report({"ERROR"}, f"Reachy Mini: {exc}")
                 return {"CANCELLED"}
+        # The editable source next to the compiled move: re-importing
+        # the .json later picks it up and restores these exact keys.
+        keys_bytes = _collect_keys(self, context)
+        if keys_bytes:
+            try:
+                with open(keyframed.sidecar_path(resolved_path), "wb") as fh:
+                    fh.write(keys_bytes)
+            except OSError as exc:
+                self.report({"WARNING"},
+                            f"Reachy Mini: keys sidecar not written ({exc})")
+                keys_bytes = None
         # Report the resolved absolute path, not props.out_path's unresolved
         # "//" form, so the artist is shown a path that actually exists.
-        with_audio = " (+ audio sidecar)" if audio_bytes else ""
+        extras = [s for s, present in (("audio", audio_bytes),
+                                       ("keys", keys_bytes)) if present]
+        with_extras = f" (+ {' & '.join(extras)} sidecar)" if extras else ""
         self.report({"INFO"},
                     f"Wrote {len(move['time'])} frames to "
-                    f"{resolved_path}{with_audio}")
+                    f"{resolved_path}{with_extras}")
         return {"FINISHED"}
 
 
@@ -619,16 +651,40 @@ on the rig, cleaned up for hand editing"""
     set_scene_range: bpy.props.BoolProperty(
         name="Set Scene Range", default=True,
         description="Fit the scene frame range to the imported move")
+    use_exact_keys: bpy.props.BoolProperty(
+        name="Prefer Exact Keys", default=True,
+        description=("When a .keys.json sidecar exists (moves exported "
+                     "by this add-on), restore its exact keys and "
+                     "tangents instead of reconstructing them from the "
+                     "dense recording"))
 
     def invoke(self, context, _event):
         context.window_manager.fileselect_add(self)
         return {"RUNNING_MODAL"}
 
     def execute(self, context):
+        mapping = _mapping(context.scene.reachy_mini_link)
+        keys_path = None
+        if self.filepath.endswith(keyframed.SUFFIX):
+            keys_path = self.filepath
+        elif self.use_exact_keys:
+            keys_path = keyframed.find_sidecar(self.filepath)
+        if keys_path:
+            try:
+                stats = keyframed.apply(context, keys_path, mapping=mapping,
+                                        load_audio=self.load_audio)
+            except (keyframed.KeysFormatError, rig.RigError, OSError) as exc:
+                self.report({"ERROR"}, f"Reachy Mini: {exc}")
+                return {"CANCELLED"}
+            with_audio = " + audio" if stats["audio"] else ""
+            self.report(
+                {"INFO"},
+                f"Restored exact keys: {stats['keys']} keys on "
+                f"{stats['channels']} channels{with_audio}")
+            return {"FINISHED"}
         try:
             stats = import_move.apply(
-                context, self.filepath, mapping=_mapping(
-                    context.scene.reachy_mini_link),
+                context, self.filepath, mapping=mapping,
                 smooth_sigma=self.smooth_sigma, tolerance=self.tolerance,
                 snap_to_frames=self.snap_to_frames,
                 load_audio=self.load_audio,
@@ -657,6 +713,7 @@ class ReachyHubMoveItem(bpy.types.PropertyGroup):
     repo_id: bpy.props.StringProperty()
     path: bpy.props.StringProperty()
     audio_path: bpy.props.StringProperty()
+    keys_path: bpy.props.StringProperty()
     is_dataset: bpy.props.BoolProperty(default=False)
 
 
@@ -704,6 +761,7 @@ def _rebuild_hub_rows():
             item.repo_id = mv["repo_id"]
             item.path = mv["path"]
             item.audio_path = mv["audio_path"] or ""
+            item.keys_path = mv.get("keys_path") or ""
     wm.reachy_hub_moves_index = min(
         wm.reachy_hub_moves_index, max(len(wm.reachy_hub_moves) - 1, 0))
 
@@ -742,19 +800,29 @@ class REACHY_MINI_OT_hub_toggle_dataset(bpy.types.Operator):
 
 
 def _hub_move_downloaded():
-    """Worker callback: run the bpy half of a Hub import on a timer."""
+    """Worker callback: run the bpy half of a Hub import on a timer.
+
+    A downloaded keys sidecar (move published from Blender) restores
+    the author's exact keys; otherwise the dense recording goes through
+    the reconstruction pipeline.
+    """
     def finish():
         dl = hub_import.download
         if dl["status"] == "fetched":
-            json_path = dl["files"][0]
+            json_path, _audio, keys_path = dl["files"]
+            name = pathlib.Path(json_path).stem
             try:
-                stats = import_move.apply(bpy.context, json_path)
-                with_audio = " + audio" if stats["audio"] else ""
-                name = pathlib.Path(json_path).stem
-                dl.update(status="done",
-                          detail=f"{name}: {stats['keys']} keys{with_audio}")
-            except (import_move.MoveFormatError, rig.RigError,
-                    OSError) as exc:
+                if keys_path:
+                    stats = keyframed.apply(bpy.context, keys_path)
+                    detail = f"{name}: exact keys ({stats['keys']})"
+                else:
+                    stats = import_move.apply(bpy.context, json_path)
+                    detail = f"{name}: {stats['keys']} keys"
+                if stats["audio"]:
+                    detail += " + audio"
+                dl.update(status="done", detail=detail)
+            except (import_move.MoveFormatError, keyframed.KeysFormatError,
+                    rig.RigError, OSError) as exc:
                 dl.update(status="error", detail=str(exc))
         return None
 
@@ -795,6 +863,7 @@ class REACHY_MINI_OT_hub_import_selected(bpy.types.Operator):
         hub_import.download_move_async(
             {"repo_id": item.repo_id, "path": item.path,
              "audio_path": item.audio_path or None,
+             "keys_path": item.keys_path or None,
              "name": pathlib.PurePosixPath(item.path).stem},
             prefs_token=_hf_prefs_token(context),
             on_done=_hub_move_downloaded)

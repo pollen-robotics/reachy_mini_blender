@@ -257,6 +257,21 @@ The file-browser sidebar has the knobs:
 | **Snap Keys to Frames** | round keys to whole frames (costs at most half a frame of timing) |
 | **Load Audio** | add the sidecar as a sequencer strip |
 | **Set Scene Range** | fit the scene frame range to the move |
+| **Prefer Exact Keys** | when a `.keys.json` sidecar exists, restore its exact keys instead of reconstructing (see below) |
+
+### Lossless re-editing: the keys sidecar
+
+The dense JSON is the *compiled* move; reconstruction from it is very
+good but approximate. So **Export Move** and **Publish to Hub** also
+write the *source*: a `<move>.keys.json` sidecar with the exact fcurve
+keys — positions, tangent handles, interpolation modes. When importing
+a move that has one (next to the file, or `sources/<move>.keys.json` in
+a Hub dataset), the add-on restores those exact keys instead: a move
+authored in Blender, published, and re-imported months later comes back
+precisely as its animator left it. Moves recorded outside Blender
+(Marionette, the official libraries) have no sidecar and go through the
+usual reconstruction. Note the sidecar snapshots the whole authored
+curves, not just the exported frame range.
 
 ### Importing straight from the Hub
 
@@ -286,9 +301,11 @@ default, created with a datacard on first use. The layout and tag are
 Marionette's community-dataset conventions, so published moves show up in its
 community browser and import cleanly: the move lands at
 `data/<slug-of-description>.json` (canonicalized to ≤50 Hz / 6 decimals),
-audio beside it as `data/<slug>.wav`, and the datacard carries the
+audio beside it as `data/<slug>.wav`, the editable keyframe source at
+`sources/<slug>.keys.json` (outside `data/`, which players treat as a
+flat move list), and the datacard carries the
 `reachy_mini_community_moves` tag. Publishing the same description again
-overwrites both files. Sign-in comes from the hf CLI token, the `HF_TOKEN`
+overwrites all of them. Sign-in comes from the hf CLI token, the `HF_TOKEN`
 env var, or a token pasted in the add-on preferences (the panel shows which
 account it found).
 

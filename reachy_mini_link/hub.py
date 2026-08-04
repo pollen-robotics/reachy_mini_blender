@@ -154,6 +154,10 @@ add-on. Marionette-compatible layout:
   set_target_data), canonicalized to <=50 Hz / 6 decimals.
 - `data/<move>.wav` - optional audio sidecar, played by the daemon in
   lockstep with the motion.
+- `sources/<move>.keys.json` - optional editable source: the exact
+  Blender keyframes (with tangents) the move was authored with. The
+  add-on's importer prefers it, so re-editing a published move is
+  lossless. Kept out of `data/` so move players ignore it.
 """
 
 # Rendered by the panel. status is one of:
@@ -255,7 +259,7 @@ def _commit_files(token, repo_id, files, message):
 
 
 def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
-                       audio=None, on_done=None):
+                       audio=None, keys=None, on_done=None):
     """Bundle `move` (and optional WAV `audio` bytes) into
     <user>/<dataset_name> on the Hub, in Marionette's community layout.
 
@@ -265,6 +269,10 @@ def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
     publishing the same description again overwrites both, which is
     the predictable thing: the description is the move's identity
     across the ecosystem.
+
+    `keys` (bytes, optional) is the keyframed source sidecar; it goes
+    to sources/<slug>.keys.json - deliberately outside data/, which
+    Marionette and other players treat as a flat list of moves.
     """
     with _lock:
         if publish["status"] == "working":
@@ -283,6 +291,9 @@ def publish_move_async(move, dataset_name=DATASET_DEFAULT, prefs_token="",
             files = [(path, json.dumps(canonicalize(move)).encode())]
             if audio:
                 files.append((f"{stem}.wav", audio))
+            if keys:
+                slug = stem[len("data/"):]
+                files.append((f"sources/{slug}.keys.json", keys))
             if not _dataset_exists(token, repo_id):
                 _create_dataset(token, dataset_name)
                 files.append(("README.md", _DATACARD.encode()))

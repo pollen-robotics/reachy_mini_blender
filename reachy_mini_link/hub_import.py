@@ -34,6 +34,7 @@ COMMUNITY_TAG = "reachy_mini_community_moves"
 _TIMEOUT = 15.0
 _MAX_DATASETS = 100
 _AUDIO_SUFFIXES = (".wav", ".ogg", ".oga", ".mp3", ".flac")
+KEYS_SUFFIX = ".keys.json"
 
 # Rendered by the panel. status is one of:
 # "idle" | "working" | "done" | "error"
@@ -58,21 +59,30 @@ def _get(url, token=None, raw=False):
 
 
 def moves_from_tree(repo_id, entries):
-    """The move list for one dataset, from its data/ tree listing.
+    """The move list for one dataset, from a recursive tree listing.
 
-    A move is any data/*.json; its audio sidecar is the same stem with
-    an audio extension, preferring the order of _AUDIO_SUFFIXES (.wav
-    first - what Marionette and this add-on write).
+    A move is any *.json in data/ or at the repo root (the two layouts
+    in use; anything deeper - sources/, configs - is not a move). Its
+    audio sidecar is the same stem with an audio extension, preferring
+    the order of _AUDIO_SUFFIXES (.wav first - what Marionette and this
+    add-on write). Its keyframed source, when the move was published
+    from Blender, is `<stem>.keys.json` next to it or under sources/.
     """
     files = {e["path"] for e in entries if e.get("type") == "file"}
     moves = []
     for path in sorted(files):
-        if not path.endswith(".json"):
+        if not path.endswith(".json") or path.endswith(KEYS_SUFFIX):
+            continue
+        parent = str(pathlib.PurePosixPath(path).parent)
+        if parent not in (".", "data"):
             continue
         stem = path[:-len(".json")]
+        name = pathlib.PurePosixPath(path).stem
         audio = next((stem + ext for ext in _AUDIO_SUFFIXES
                       if stem + ext in files), None)
-        name = pathlib.PurePosixPath(path).stem
+        keys = next((c for c in (stem + KEYS_SUFFIX,
+                                 f"sources/{name}{KEYS_SUFFIX}")
+                     if c in files), None)
         moves.append({
             "repo_id": repo_id,
             "path": path,
@@ -81,6 +91,7 @@ def moves_from_tree(repo_id, entries):
             # or dataset works in the same search box.
             "label": f"{name} \u00b7 {repo_id}",
             "audio_path": audio,
+            "keys_path": keys,
         })
     return moves
 
@@ -107,22 +118,21 @@ def group_moves(moves):
 
 
 def repo_moves(repo_id, get):
-    """All moves in one dataset, trying both layouts in use.
+    """All moves in one dataset, from one recursive tree listing.
 
-    Marionette and Publish to Hub write data/<move>.json; the official
-    pollen-robotics libraries (emotions, dances) predate that and keep
-    <move>.json at the repo root. `get` is a url -> parsed-JSON callable
-    so the network stays injectable for tests.
+    One call covers both layouts in use (Marionette and Publish to Hub
+    write data/<move>.json; the official pollen-robotics libraries
+    predate that and keep <move>.json at the repo root) plus the
+    sources/ sidecars. The tree endpoint pages at 1000 entries; move
+    datasets are far below that today. `get` is a url -> parsed-JSON
+    callable so the network stays injectable for tests.
     """
-    for suffix in ("/tree/main/data", "/tree/main"):
-        try:
-            entries = get(f"{hub.HUB_URL}/api/datasets/{repo_id}{suffix}")
-        except (urllib.error.URLError, OSError, ValueError):
-            continue
-        moves = moves_from_tree(repo_id, entries)
-        if moves:
-            return moves
-    return []
+    try:
+        entries = get(f"{hub.HUB_URL}/api/datasets/{repo_id}"
+                      "/tree/main?recursive=true")
+    except (urllib.error.URLError, OSError, ValueError):
+        return []
+    return moves_from_tree(repo_id, entries)
 
 
 def list_moves_async(prefs_token="", on_done=None):
@@ -185,11 +195,14 @@ def local_dir(repo_id):
 
 
 def download_move_async(move, prefs_token="", on_done=None):
-    """Fetch a move's JSON (and sidecar) into the cache.
+    """Fetch a move's JSON (and its sidecars) into the cache.
 
-    On success download["files"] holds (json_path, audio_path_or_None)
-    and status is "fetched" - importing needs bpy, so that last step is
-    the caller's job on the main thread.
+    On success download["files"] holds (json_path, audio_path_or_None,
+    keys_path_or_None) and status is "fetched" - importing needs bpy,
+    so that last step is the caller's job on the main thread. The keys
+    sidecar always lands as `<stem>.keys.json` next to the JSON, even
+    when the dataset keeps it under sources/, so the local layout is
+    the one the importer's sidecar lookup expects.
     """
     with _lock:
         if download["status"] == "working":
@@ -202,19 +215,23 @@ def download_move_async(move, prefs_token="", on_done=None):
             dest = local_dir(move["repo_id"])
             dest.mkdir(parents=True, exist_ok=True)
 
-            def fetch(path):
+            def fetch(path, local_name=None):
                 data = _get(f"{hub.HUB_URL}/datasets/{move['repo_id']}"
                             f"/resolve/main/{path}", token, raw=True)
-                local = dest / pathlib.PurePosixPath(path).name
+                local = dest / (local_name
+                                or pathlib.PurePosixPath(path).name)
                 local.write_bytes(data)
                 return str(local)
 
             json_path = fetch(move["path"])
             audio_path = fetch(move["audio_path"]) if move.get("audio_path") \
                 else None
+            keys_path = fetch(move["keys_path"],
+                              f"{move['name']}{KEYS_SUFFIX}") \
+                if move.get("keys_path") else None
             with _lock:
                 download.update(status="fetched",
-                                files=(json_path, audio_path))
+                                files=(json_path, audio_path, keys_path))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             detail = getattr(exc, "reason", None) or exc
             with _lock:

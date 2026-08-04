@@ -39,6 +39,33 @@ class MovesFromTreeTest(unittest.TestCase):
         moves = hub_import.moves_from_tree("u/d", entries)
         self.assertEqual([m["name"] for m in moves], ["a"])
 
+    def test_keys_sidecar_next_to_move(self):
+        moves = hub_import.moves_from_tree(
+            "u/d", _tree("data/a.json", "data/a.keys.json"))
+        self.assertEqual([m["name"] for m in moves], ["a"])
+        self.assertEqual(moves[0]["keys_path"], "data/a.keys.json")
+
+    def test_keys_sidecar_under_sources(self):
+        moves = hub_import.moves_from_tree(
+            "u/d", _tree("data/a.json", "sources/a.keys.json"))
+        self.assertEqual(moves[0]["keys_path"], "sources/a.keys.json")
+
+    def test_keys_sidecar_is_not_a_move(self):
+        moves = hub_import.moves_from_tree(
+            "u/d", _tree("data/a.keys.json"))
+        self.assertEqual(moves, [])
+
+    def test_deep_json_is_not_a_move(self):
+        moves = hub_import.moves_from_tree(
+            "u/d", _tree("sources/a.keys.json", "configs/x.json"))
+        self.assertEqual(moves, [])
+
+    def test_root_layout_move(self):
+        moves = hub_import.moves_from_tree(
+            "u/d", _tree("amazed1.json", "amazed1.ogg", "README.md"))
+        self.assertEqual(moves[0]["path"], "amazed1.json")
+        self.assertEqual(moves[0]["audio_path"], "amazed1.ogg")
+
 
 class SortMovesTest(unittest.TestCase):
     def test_pollen_first_then_alphabetical(self):
@@ -53,34 +80,24 @@ class SortMovesTest(unittest.TestCase):
 
 
 class RepoMovesTest(unittest.TestCase):
-    def test_prefers_data_layout(self):
+    def test_single_recursive_call_covers_both_layouts(self):
+        calls = []
+
         def get(url):
-            if url.endswith("/tree/main/data"):
-                return _tree("data/a.json")
-            raise AssertionError("root should not be fetched")
+            calls.append(url)
+            return _tree("data/a.json", "root_move.json",
+                         "sources/a.keys.json")
         moves = hub_import.repo_moves("u/d", get)
-        self.assertEqual(moves[0]["path"], "data/a.json")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("recursive=true", calls[0])
+        self.assertEqual([m["path"] for m in moves],
+                         ["data/a.json", "root_move.json"])
+        self.assertEqual(moves[0]["keys_path"], "sources/a.keys.json")
 
-    def test_falls_back_to_root_layout(self):
+    def test_network_error_gives_empty(self):
         def get(url):
-            if url.endswith("/tree/main/data"):
-                raise OSError("404")
-            return _tree("amazed1.json", "amazed1.ogg", "README.md")
-        moves = hub_import.repo_moves("pollen-robotics/emotions", get)
-        self.assertEqual(moves[0]["path"], "amazed1.json")
-        self.assertEqual(moves[0]["audio_path"], "amazed1.ogg")
-
-    def test_empty_data_dir_falls_back(self):
-        def get(url):
-            if url.endswith("/tree/main/data"):
-                return _tree("data/notes.txt")
-            return _tree("wave.json")
-        moves = hub_import.repo_moves("u/d", get)
-        self.assertEqual(moves[0]["path"], "wave.json")
-
-    def test_nothing_anywhere(self):
-        self.assertEqual(
-            hub_import.repo_moves("u/d", lambda url: []), [])
+            raise OSError("404")
+        self.assertEqual(hub_import.repo_moves("u/d", get), [])
 
 
 class GroupMovesTest(unittest.TestCase):
